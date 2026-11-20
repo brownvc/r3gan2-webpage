@@ -511,7 +511,7 @@ async function main() {
   function drawSiteLabels(sd) {
     const key = `${epoch}|${LC}`;
     if (key !== siteLabKey || siteLab.size > 60000) { siteLab.clear(); siteLabKey = key; }
-    const s = view.s; if (0.6 * LC * s < 40) return;  // no name fits a region yet
+    const s = view.s; if (0.6 * LC * s < 40) { drawFarSiteLabels(sd); return; }  // no name fits a region: a sparse set
     const Q4 = Math.log(2) / 4, f = DYN_FONT.cls, until = performance.now() + 4;  // new names: ~4 ms a frame at most
     const x0 = view.x - W / 2 / sd, x1 = view.x + W / 2 / sd, y0 = view.y - H / 2 / sd, y1 = view.y + H / 2 / sd;
     const a0 = Math.floor((x0 - WARP) / LC) - 1, a1 = Math.floor((x1 + WARP) / LC) + 1;
@@ -528,6 +528,35 @@ async function main() {
       ctx.fillStyle = '#ffffff'; ctx.fillText(G.names[L.c], x, y + 0.5 * dpr);
     }
     ctx.globalAlpha = 1; ctx.letterSpacing = '0px';
+  }
+  // Far out in Endless no name fits its region, and there are no groups to name instead. So a sparse set shows: the
+  // highest-ranked sites in view (rank: the same fixed hash), each placed at its fixed point unless its pill would
+  // overlap one already placed, at most ~60. Names never move; as the zoom changes some appear or go, as on any map.
+  function drawFarSiteLabels(sd) {
+    const x0 = view.x - W / 2 / sd, x1 = view.x + W / 2 / sd, y0 = view.y - H / 2 / sd, y1 = view.y + H / 2 / sd;
+    const a0 = Math.floor((x0 - WARP) / LC), a1 = Math.floor((x1 + WARP) / LC), b0 = Math.floor((y0 - WARP) / LC), b1 = Math.floor((y1 + WARP) / LC);
+    const nSites = (a1 - a0 + 1) * (b1 - b0 + 1); if (nSites <= 0) return;
+    // only the top ~300 ranks are candidates (rank is uniform in [0, 2^32)), so the work stays small however far out
+    const cut = 4294967296 * Math.max(0, 1 - 300 / nSites), cand = [], until = performance.now() + 4;
+    for (let b = b0; b <= b1; b++) for (let a = a0; a <= a1; a++) {
+      if (hash2(a, b, 61) < cut) continue;
+      if (!siteLab.has(a + ',' + b) && performance.now() > until) continue;  // the rest next frame
+      const L = siteLabel(a, b); if (L.c >= 0) cand.push(L);
+    }
+    cand.sort((p, q) => q.rank - p.rank);
+    const f = DYN_FONT.cls, placed = [];
+    ctx.font = f[0].replace(/\d+px/, (m) => `${Math.round(parseInt(m) * dpr)}px`); ctx.letterSpacing = `${f[1] * dpr}px`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    for (const L of cand) {
+      if (placed.length >= 60) break;
+      const x = (L.x - view.x) * sd + W / 2, y = (L.y - view.y) * sd + H / 2, tw = L.w * dpr, th = L.h * dpr;
+      if (x + tw / 2 < 0 || x - tw / 2 > W || y + th / 2 < 0 || y - th / 2 > H) continue;
+      if (placed.some((r) => Math.abs(r[0] - x) < (r[2] + tw) / 2 + 8 * dpr && Math.abs(r[1] - y) < (r[3] + th) / 2 + 4 * dpr)) continue;
+      placed.push([x, y, tw, th]);
+      ctx.fillStyle = 'rgba(33,37,41,0.78)'; ctx.beginPath(); ctx.roundRect(x - tw / 2, y - th / 2, tw, th, th / 2); ctx.fill();
+      ctx.fillStyle = '#ffffff'; ctx.fillText(G.names[L.c], x, y + 0.5 * dpr);
+    }
+    ctx.letterSpacing = '0px';
   }
   // One noise field for the whole map, as the main demo keeps it fixed while walking. Its seed is drawn per visit unless
   // the link has one (n), and goes into the link with its strength (ns), so a link reproduces the map.
@@ -1030,20 +1059,33 @@ async function main() {
     // Endless: the lattice's cell is a power of two, so it changes only once per octave of zoom (not on every zoom
     // step), and a frame that moved keeps the cells it has (shifted): a pan computes only the new rows and columns.
     const all = look.layout === 'all', [cx, cy, span, MN] = miniFrame(), k = px / span, x0 = cx - span / 2, y0 = cy - span / 2;
-    const cell = all ? span / MN : 2 ** Math.ceil(Math.log2(span / MN)), n = all ? MN + 1 : Math.ceil(span / cell) + 2;
-    const ga = Math.floor(x0 / cell), gb = Math.floor(y0 / cell), key = `${epoch}|${cell}|${ga}|${gb}`;
+    const cell = all ? span / MN : 2 ** Math.ceil(Math.log2(span / MN));
+    // Endless: the region built is snapped to blocks of 8 cells with a margin, so the small shifts and size changes of a
+    // zoom (the frame follows the view) keep the same region instead of restarting the build at every step.
+    let ga, gb, n;
+    if (all) { ga = Math.floor(x0 / cell); gb = Math.floor(y0 / cell); n = MN + 1; }
+    else {
+      const BK = 8, a0 = Math.floor(x0 / cell) - 2, b0 = Math.floor(y0 / cell) - 2, w = Math.ceil(span / cell) + 4;
+      ga = Math.floor(a0 / BK) * BK; gb = Math.floor(b0 / BK) * BK; n = Math.ceil(Math.max(a0 + w - ga, b0 + w - gb) / BK) * BK;
+    }
+    const key = `${epoch}|${cell}|${ga}|${gb}|${n}`;
     // The background (each cell's class colours) is built a few rows per call within ~6 ms, so a slow CPU never freezes
     // on it (a whole grid is ~0.7 s at 4x CPU throttling); until it is done the previous one shows where it was.
     if (miniBg.key !== key) {
       if (miniJob.key !== key) {
-        miniJob = { key, ga, gb, cell, n, b: 0, im: new ImageData(n, n), have: null };
-        const P = miniBg, J = miniJob;
-        if (P.im && P.cell === cell && P.epoch === epoch) {  // the same lattice, moved: copy what overlaps
-          J.have = new Uint8Array(n * n);
+        const old = miniJob;
+        miniJob = { key, ga, gb, cell, n, b: 0, im: new ImageData(n, n), have: null, epoch };
+        const J = miniJob;
+        // The same lattice, moved or resized: copy what overlaps, from the finished background and from a build that
+        // was under way (its finished rows and copied cells), so an interrupted build is never thrown away.
+        for (const P of [miniBg, old]) {
+          if (!P.im || P.cell !== cell || P.epoch !== epoch) continue;
+          J.have ||= new Uint8Array(n * n);
+          const done = (pa, pb) => (P === miniBg || pb < P.b || (P.have && P.have[pb * P.n + pa]));
           for (let b = 0; b < n; b++) {
             const pb = gb + b - P.gb; if (pb < 0 || pb >= P.n) continue;
             for (let a = 0; a < n; a++) {
-              const pa = ga + a - P.ga; if (pa < 0 || pa >= P.n) continue;
+              const pa = ga + a - P.ga; if (pa < 0 || pa >= P.n || J.have[b * n + a] || !done(pa, pb)) continue;
               const o = 4 * (b * n + a), q = 4 * (pb * P.n + pa);
               J.im.data[o] = P.im.data[q]; J.im.data[o + 1] = P.im.data[q + 1]; J.im.data[o + 2] = P.im.data[q + 2]; J.im.data[o + 3] = P.im.data[q + 3];
               J.have[b * n + a] = 1;
