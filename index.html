@@ -1,0 +1,254 @@
+---
+redirect_from: r3gan2/
+---
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <title>Magnitude-preserving Discriminators Enable Efficient GANs</title>
+
+  <link rel="preconnect" href="https://use.typekit.net" crossorigin>
+  <link rel="stylesheet" href="https://use.typekit.net/diw5pgv.css">
+  <link rel="stylesheet" href="https://visual.cs.brown.edu/projects/shared/project.css">
+  <script defer src="https://visual.cs.brown.edu/projects/shared/project.js"></script>
+
+  <style id="page-skin">
+    :root { --ph: #e9e9e9; --ph-line: #dcdcdc; }
+    :root[data-bs-theme="dark"] { --ph: #2c2c2c; --ph-line: #333; }
+
+    .takehome { font-family: var(--font-head); font-size: 1.3em; line-height: 1.35; text-align: center; margin: 1.1em auto 0.4em; max-width: 34em; text-wrap: balance; }
+    .takehome.unguided { font-size: 1.1em; margin-top: 1.4em; }
+    .takehome sup { font-size: 0.6em; vertical-align: super; line-height: 0; }
+    /* the headline: a lead in the heading face's bold, then one claim per line */
+    div.takehome p { margin: 0; }
+    div.takehome p + p { margin-top: 0.2em; }
+    div.takehome .lead { font-weight: 600; font-size: 1.12em; margin-bottom: 0.35em; }
+    .takehome sup .ref, .takehome sup .ref a { font-size: 1em; }
+    pre.citation { white-space: pre-wrap; }  /* the author line wraps rather than being cut off */
+    .takehome sup a.ref { font-size: 1em; }
+    .nw { white-space: nowrap; }
+    /* the link row: logos in the buttons' colour (red, white on hover); wordmarks alone, marks beside their word */
+    .resource-row a { display: inline-flex; align-items: center; gap: 0.4em; }
+    .resource-row svg.logo { fill: currentColor; flex: none; }
+    .resource-row svg.mark { width: 1.15em; height: 1.15em; }
+    .resource-row svg.wm-arxiv { height: 1.15em; width: 2.5em; }  /* 251 x 115 viewBox */
+    .resource-row svg.wm-openreview { height: 1.15em; width: 4.6em; }  /* 6221 x 1561 viewBox */
+    .affiliations { text-align: center; color: var(--ink-muted); margin: 0.2em 0 0.8em; }
+
+    .seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+    .seg button { font: inherit; color: var(--ink); border: 0; border-right: 1px solid var(--border); background: var(--bg); padding: 4px 10px; cursor: pointer; white-space: nowrap; }
+    .seg button:last-child { border-right: 0; }
+    .seg button:hover { color: var(--accent); }
+    .seg button[aria-pressed="true"] { background: var(--accent); color: var(--bg); font-weight: 600; }
+    .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: center; margin: 0.6em 0 1em; }
+    button.plain { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--border); border-radius: 7px; padding: 4px 10px; cursor: pointer; }
+    button.plain:hover { border-color: var(--accent); color: var(--accent); }
+    figcaption, .sub { color: var(--ink-muted); font-size: 0.92em; }
+    figcaption { margin-top: 0.6em; }
+
+    /* samples: the paper's Figure 8 */
+    #samples-section { border: 0; overflow-x: auto; position: relative; }
+    /* headings that only name a section for the nav bar */
+    .vh { position: absolute; width: 1px; height: 1px; margin: 0; padding: 0; border: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+    /* the template's venue line is all caps, which would print NEURIPS */
+    .venue { text-transform: none; letter-spacing: 0.06em; font-size: 0.95em; }
+    #fig8 { display: grid; grid-template-columns: 190px repeat(5, minmax(0, 1fr)); gap: 5px; align-items: center; min-width: 620px; }
+    @media (max-width: 640px) {
+      #fig8 { grid-template-columns: repeat(5, minmax(0, 1fr)); min-width: 0; gap: 3px; }
+      #fig8 .who { grid-column: 1 / -1; margin: 10px 0 2px; }
+    }
+    #fig8 .who small + small { margin-top: 2px; }
+    a.ref { color: var(--ink-muted); font-weight: 400; font-size: 0.85em; text-decoration: none; }
+    .refs { list-style: none; padding-left: 0; }
+    .refs li { margin: 0.3em 0; }
+    .refs .n { color: var(--ink-muted); }
+    #fig8 img { width: 100%; max-width: none; aspect-ratio: 1; object-fit: cover; display: block; border-radius: 3px; }
+    .who { font-weight: 600; line-height: 1.2; }
+    .who small { display: block; font-weight: 400; color: var(--ink-muted); font-size: 13px; }
+    .who.ours, .wp.ours .who { color: var(--accent); }
+
+    /* speed: waiting like an image app */
+    /* one grid for all panels (label, image, counter rows shared), so images line up and nothing moves as counts grow */
+    .panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 4px 12px; }
+    .wp { display: grid; grid-row: span 3; grid-template-rows: subgrid; }
+    .wp .who { font-size: 15px; align-self: end; margin-bottom: 4px; min-height: var(--who-h, auto); }
+    .wp .meta > span { display: block; white-space: nowrap; }
+    .stage { position: relative; aspect-ratio: 1; border-radius: 4px; overflow: hidden; background: var(--ph); }
+    .stage > * { position: absolute; inset: 0; width: 100%; height: 100%; max-width: none; object-fit: cover; }
+    .stage .dim { background: rgba(0, 0, 0, 0.15); }
+    .stage .ring { width: 48px; height: 48px; inset: auto; left: calc(50% - 24px); top: calc(50% - 24px); border-radius: 50%; background: rgba(0, 0, 0, 0.3); }
+    .ring svg { width: 100%; height: 100%; transform: rotate(-90deg); display: block; }
+    .ring circle { fill: none; stroke-width: 3.5; }
+    .ring .rt { stroke: rgba(255, 255, 255, 0.3); }
+    .ring .rf { stroke: #fff; stroke-linecap: round; }
+    .ring span { position: absolute; inset: 0; display: grid; place-content: center; color: #fff; font-size: 12px; font-weight: 600; text-shadow: 0 0 3px rgba(0, 0, 0, 0.8); }
+    .ph { display: grid; place-content: center; text-align: center; background: var(--ph);
+      background-image: repeating-linear-gradient(45deg, transparent 0 9px, var(--ph-line) 9px 10px); color: var(--ink-muted); font-size: 12.5px; line-height: 1.25; padding: 4px; }
+    .ph small { display: block; opacity: 0.8; }
+    .wp .meta { color: var(--ink-muted); font-size: 13.5px; margin-top: 4px; font-variant-numeric: tabular-nums lining-nums; }
+    .wp .meta b { color: var(--ink); }
+
+    /* map and generator */
+    .map-video { display: block; margin: 0 auto 1.5em; max-width: 560px; }  /* the video is a link to the map */
+    .map-video video { display: block; width: 100%; aspect-ratio: 1; border-radius: 6px; background: #000; }
+    .map-still { display: flex; align-items: center; justify-content: center; aspect-ratio: 16 / 9; background: var(--bg-soft); border: 1px solid var(--border); border-radius: 6px; color: var(--ink-muted); }
+    .go { text-align: center; margin: 1em 0; }
+    .go a { display: inline-block; font-weight: 600; color: var(--bg); background: var(--accent); border-radius: 6px; padding: 0.5em 1.1em; text-decoration: none; }
+    .go a:hover { background: var(--accent-hover); }
+    /* wider than the text column, so the generator keeps its side-by-side layout */
+    iframe.generator { display: block; width: min(1120px, calc(100vw - 32px)); position: relative; left: 50%; transform: translateX(-50%); height: 760px; border: 0; }
+    .nogpu { text-align: center; color: var(--ink-muted); }
+  </style>
+
+  <script>
+    (function () {
+      var t; try { t = localStorage.getItem('theme'); } catch (e) {}
+      var dark = t === 'dark' || (!t && matchMedia('(prefers-color-scheme: dark)').matches);
+      document.documentElement.setAttribute('data-bs-theme', dark ? 'dark' : 'light');
+    })();
+  </script>
+</head>
+
+<body>
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true"><!-- logos, all currentColor -->
+<symbol id="icon-arxiv" viewBox="-2 -2 250.978 115.119">
+    <path d="M427.571,255.154c1.859,0,3.1,1.24,3.985,3.453,1.062-2.213,2.568-3.453,4.694-3.453h14.878a4.062,4.062,0,0,1,4.074,4.074v7.828c0,2.656-1.327,4.074-4.074,4.074-2.656,0-4.074-1.418-4.074-4.074V263.3H436.515a2.411,2.411,0,0,0-2.656,2.745v27.188h10.007c2.658,0,4.074,1.329,4.074,4.074s-1.416,4.074-4.074,4.074h-26.39c-2.659,0-3.986-1.328-3.986-4.074s1.327-4.074,3.986-4.074h8.236V263.3h-7.263c-2.656,0-3.985-1.329-3.985-4.074,0-2.658,1.329-4.074,3.985-4.074Z" transform="translate(-358.165 -222.27)" fill="var(--icon-arxiv-color, currentColor)"/>
+    <path d="M539.233,255.154c2.656,0,4.074,1.416,4.074,4.074v34.007h10.1c2.746,0,4.074,1.329,4.074,4.074s-1.328,4.074-4.074,4.074H524.8c-2.656,0-4.074-1.328-4.074-4.074s1.418-4.074,4.074-4.074h10.362V263.3h-8.533c-2.744,0-4.073-1.329-4.073-4.074,0-2.658,1.329-4.074,4.073-4.074Zm4.22-17.615a5.859,5.859,0,1,1-5.819-5.819A5.9,5.9,0,0,1,543.453,237.539Z" transform="translate(-358.165 -222.27)" fill="var(--icon-arxiv-color, currentColor)"/>
+    <path d="M605.143,259.228a4.589,4.589,0,0,1-.267,1.594L590,298.9a3.722,3.722,0,0,1-3.721,2.48h-5.933a3.689,3.689,0,0,1-3.808-2.48l-15.055-38.081a3.23,3.23,0,0,1-.355-1.594,4.084,4.084,0,0,1,4.164-4.074,3.8,3.8,0,0,1,3.718,2.656l14.348,36.134,13.9-36.134a3.8,3.8,0,0,1,3.72-2.656A4.084,4.084,0,0,1,605.143,259.228Z" transform="translate(-358.165 -222.27)" fill="var(--icon-arxiv-color, currentColor)"/>
+    <path d="M486.149,277.877l-32.741,38.852c-1.286,1.372-2.084,3.777-1.365,5.5a4.705,4.705,0,0,0,4.4,2.914,4.191,4.191,0,0,0,3.16-1.563l40.191-42.714a4.417,4.417,0,0,0,.042-6.042Z" transform="translate(-358.165 -222.27)" fill="var(--icon-arxiv-color, currentColor)"/>
+    <path d="M486.149,277.877l31.187-38.268c1.492-1.989,2.2-3.03,1.492-4.723a5.142,5.142,0,0,0-4.481-3.161h0a4.024,4.024,0,0,0-3.008,1.108L472.711,274.6a4.769,4.769,0,0,0,.015,6.53L520.512,332.2a3.913,3.913,0,0,0,3.137,1.192,4.394,4.394,0,0,0,4.027-2.818c.719-1.727-.076-3.438-1.4-5.23l-40.124-47.464" transform="translate(-358.165 -222.27)" fill="var(--icon-arxiv-color, currentColor)"/>
+    <path d="M499.833,274.828,453.169,224.4s-1.713-2.08-3.524-2.124a4.607,4.607,0,0,0-4.338,2.788c-.705,1.692-.2,2.88,1.349,5.1l40.093,48.422" transform="translate(-358.165 -222.27)" fill="var(--icon-arxiv-color, currentColor)"/>
+    <path d="M390.61,255.154c5.018,0,8.206,3.312,8.206,8.4v37.831H363.308a4.813,4.813,0,0,1-5.143-4.929V283.427a8.256,8.256,0,0,1,7-8.148l25.507-3.572v-8.4H362.306a4.014,4.014,0,0,1-4.141-4.074c0-2.87,2.143-4.074,4.355-4.074Zm.059,38.081V279.942l-24.354,3.4v9.9Z" transform="translate(-358.165 -222.27)" fill="var(--icon-arxiv-color, currentColor)"/>
+</symbol>
+<symbol id="icon-openreview" viewBox="35 -1041 6221 1561">
+    <path d="M735 -358Q735 -247 698.5 -164.5Q662 -82 587.0 -36.0Q512 10 395 10Q279 10 203.5 -36.0Q128 -82 91.5 -165.0Q55 -248 55 -359Q55 -469 91.5 -551.5Q128 -634 203.5 -679.5Q279 -725 396 -725Q512 -725 587.5 -679.5Q663 -634 699.0 -551.5Q735 -469 735 -358ZM216 -358Q216 -246 258.5 -182.5Q301 -119 395 -119Q491 -119 532.5 -182.5Q574 -246 574 -358Q574 -470 532.5 -534.0Q491 -598 396 -598Q301 -598 258.5 -534.0Q216 -470 216 -358ZM1170 -556Q1264 -556 1319.5 -484.5Q1375 -413 1375 -274Q1375 -134 1316.5 -62.0Q1258 10 1166 10Q1106 10 1070.5 -11.5Q1035 -33 1015 -59H1009Q1011 -41 1013.0 -17.5Q1015 6 1015 31V240H864V-546H987L1008 -475H1015Q1037 -508 1073.0 -532.0Q1109 -556 1170 -556ZM1120 -436Q1062 -436 1039.5 -400.0Q1017 -364 1015 -291V-275Q1015 -196 1037.5 -154.0Q1060 -112 1121 -112Q1172 -112 1197.0 -154.0Q1222 -196 1222 -276Q1222 -436 1120 -436ZM1729 -556Q1843 -556 1908.5 -492.0Q1974 -428 1974 -308V-235H1623Q1626 -173 1661.5 -137.5Q1697 -102 1764 -102Q1815 -102 1857.0 -112.0Q1899 -122 1943 -142V-29Q1903 -9 1858.0 0.5Q1813 10 1748 10Q1667 10 1604.5 -20.5Q1542 -51 1506.0 -113.0Q1470 -175 1470 -269Q1470 -412 1541.5 -484.0Q1613 -556 1729 -556ZM1733 -449Q1688 -449 1659.5 -420.5Q1631 -392 1627 -336H1833Q1832 -385 1807.5 -417.0Q1783 -449 1733 -449ZM2405 -556Q2495 -556 2547.0 -508.5Q2599 -461 2599 -356V0H2449V-318Q2449 -436 2361 -436Q2293 -436 2268.5 -389.5Q2244 -343 2244 -256V0H2093V-546H2209L2230 -473H2236Q2290 -556 2405 -556ZM2974 -714Q3253 -714 3253 -506Q3253 -433 3216.0 -387.0Q3179 -341 3124 -315L3327 0H3152L2993 -274H2908V0H2755V-714ZM2971 -595H2908V-392H2971Q3032 -392 3065.0 -417.0Q3098 -442 3098 -499Q3098 -547 3067.5 -571.0Q3037 -595 2971 -595ZM3632 -556Q3746 -556 3811.5 -492.0Q3877 -428 3877 -308V-235H3526Q3529 -173 3564.5 -137.5Q3600 -102 3667 -102Q3718 -102 3760.0 -112.0Q3802 -122 3846 -142V-29Q3806 -9 3761.0 0.5Q3716 10 3651 10Q3570 10 3507.5 -20.5Q3445 -51 3409.0 -113.0Q3373 -175 3373 -269Q3373 -412 3444.5 -484.0Q3516 -556 3632 -556ZM3636 -449Q3591 -449 3562.5 -420.5Q3534 -392 3530 -336H3736Q3735 -385 3710.5 -417.0Q3686 -449 3636 -449ZM4131 0 3923 -546H4081L4183 -224Q4188 -208 4195.5 -180.5Q4203 -153 4205 -134H4209Q4211 -154 4218.5 -179.5Q4226 -205 4232 -223L4336 -546H4494L4286 0ZM4644 -761Q4677 -761 4701.5 -745.5Q4726 -730 4726 -687Q4726 -646 4701.5 -630.0Q4677 -614 4644 -614Q4610 -614 4586.0 -630.0Q4562 -646 4562 -687Q4562 -730 4586.0 -745.5Q4610 -761 4644 -761ZM4719 -546V0H4568V-546ZM5099 -556Q5213 -556 5278.5 -492.0Q5344 -428 5344 -308V-235H4993Q4996 -173 5031.5 -137.5Q5067 -102 5134 -102Q5185 -102 5227.0 -112.0Q5269 -122 5313 -142V-29Q5273 -9 5228.0 0.5Q5183 10 5118 10Q5037 10 4974.5 -20.5Q4912 -51 4876.0 -113.0Q4840 -175 4840 -269Q4840 -412 4911.5 -484.0Q4983 -556 5099 -556ZM5103 -449Q5058 -449 5029.5 -420.5Q5001 -392 4997 -336H5203Q5202 -385 5177.5 -417.0Q5153 -449 5103 -449ZM5875 -191Q5871 -208 5863.5 -241.5Q5856 -275 5847.0 -313.5Q5838 -352 5830.0 -384.5Q5822 -417 5819 -432H5815Q5812 -417 5804.5 -384.5Q5797 -352 5788.0 -313.5Q5779 -275 5771.0 -241.0Q5763 -207 5759 -189L5715 0H5555L5400 -546H5548L5611 -304Q5618 -279 5623.5 -244.0Q5629 -209 5634.0 -176.5Q5639 -144 5641 -125H5645Q5646 -139 5649.0 -162.5Q5652 -186 5656.5 -211.0Q5661 -236 5664.5 -256.5Q5668 -277 5670 -284L5737 -546H5901L5965 -284Q5969 -270 5974.5 -239.0Q5980 -208 5984.5 -176.0Q5989 -144 5989 -125H5993Q5995 -142 6000.0 -174.5Q6005 -207 6011.5 -243.0Q6018 -279 6025 -304L6090 -546H6236L6079 0H5917Z" fill="var(--icon-openreview-color, currentColor)"/>
+</symbol>
+<symbol id="icon-github" viewBox="-2 -2 102 100">
+    <path fill="var(--icon-github-color, currentColor)" fill-rule="evenodd" clip-rule="evenodd" d="M48.854 0C21.839 0 0 22 0 49.217c0 21.756 13.993 40.172 33.405 46.69 2.427.49 3.316-1.059 3.316-2.362 0-1.141-.08-5.052-.08-9.127-13.59 2.934-16.42-5.867-16.42-5.867-2.184-5.704-5.42-7.17-5.42-7.17-4.448-3.015.324-3.015.324-3.015 4.934.326 7.523 5.052 7.523 5.052 4.367 7.496 11.404 5.378 14.235 4.074.404-3.178 1.699-5.378 3.074-6.6-10.839-1.141-22.243-5.378-22.243-24.283 0-5.378 1.94-9.778 5.014-13.2-.485-1.222-2.184-6.275.486-13.038 0 0 4.125-1.304 13.426 5.052a46.97 46.97 0 0 1 12.214-1.63c4.125 0 8.33.571 12.213 1.63 9.302-6.356 13.427-5.052 13.427-5.052 2.67 6.763.97 11.816.485 13.038 3.155 3.422 5.015 7.822 5.015 13.2 0 18.905-11.404 23.06-22.324 24.283 1.78 1.548 3.316 4.481 3.316 9.126 0 6.6-.08 11.897-.08 13.526 0 1.304.89 2.853 3.316 2.364 19.412-6.52 33.405-24.935 33.405-46.691C97.707 22 75.788 0 48.854 0z"/>
+</symbol>
+<symbol id="icon-huggingface" viewBox="107 151 1285 1197">
+    <path fill-rule="evenodd" clip-rule="evenodd" d="M1348.72 1168.37C1360.03 1142.67 1361.13 1113.74 1351.94 1087.55C1361.08 1064.58 1362.52 1038.87 1356.33 1014.97C1353.1 1002.63 1347.95 991.175 1341.12 980.965C1342.52 976.029 1343.6 970.929 1344.36 965.659C1349.44 930.378 1337.38 896.408 1313.59 870.403C1302.83 858.64 1289.91 849.894 1275.97 844.105C1284.44 805.888 1288.9 766.185 1288.9 725.475C1288.9 425.12 1046.33 181.36 746.772 181.36C447.213 181.36 204.644 425.12 204.644 725.475C204.644 767.136 209.317 807.743 218.176 846.781C206.46 852.482 195.618 860.354 186.431 870.403C162.65 896.406 150.585 930.384 155.658 965.659C156.415 970.926 157.505 976.031 158.904 980.965C152.074 991.175 146.922 1002.63 143.692 1014.97C137.445 1038.82 138.958 1064.63 148.078 1087.54C138.888 1113.74 139.992 1142.68 151.301 1168.37C171.605 1214.49 218.813 1243.21 283.614 1269C355.654 1297.68 435.229 1318.64 516.715 1318.64C582.532 1318.64 639.737 1302.62 681.509 1265.68C702.919 1268.26 724.699 1269.59 746.772 1269.59C770.797 1269.59 794.475 1268.02 817.706 1264.97C859.527 1302.39 917.048 1318.64 983.305 1318.64C1065.11 1318.64 1144.1 1297.79 1216.41 1269C1281.21 1243.21 1328.42 1214.49 1348.72 1168.37ZM1201.48 1231.5C1265.52 1206.01 1298.5 1182.26 1311.77 1152.11C1321.11 1130.89 1319.46 1106.41 1307.02 1086.84C1323.52 1061.54 1320.36 1036.98 1317.28 1025.19C1313.34 1010.15 1305.2 997.644 1294.14 988.661C1299.38 979.912 1302.89 970.461 1304.41 959.918C1307.59 937.779 1300.28 915.653 1283.81 897.648C1278.56 891.903 1272.36 887.26 1265.59 883.763C1253.45 877.49 1239.44 874.904 1225.67 876.26C1229.83 862.94 1233.45 849.38 1236.51 835.609C1244.38 800.161 1248.53 763.306 1248.53 725.476C1248.53 447.262 1023.89 221.726 746.772 221.726C469.656 221.726 245.01 447.262 245.01 725.476C245.01 763.44 249.193 800.424 257.122 835.988C260.135 849.506 263.69 862.818 267.762 875.901C254.074 875.791 240.392 879.604 228.93 886.961C224.276 889.948 219.988 893.519 216.214 897.648C199.743 915.653 192.427 937.779 195.613 959.918C197.128 970.461 200.637 979.912 205.881 988.661C194.823 997.644 186.678 1010.15 182.742 1025.19C179.66 1036.98 176.501 1061.54 192.997 1086.84C180.564 1106.41 178.908 1130.89 188.245 1152.11C201.517 1182.26 234.498 1206.01 298.542 1231.5C367.636 1259 441.978 1278.27 516.715 1278.27C584.432 1278.27 634.963 1259.67 667.239 1222.93C693.142 1227.07 719.707 1229.23 746.772 1229.23C775.811 1229.23 804.275 1226.75 831.964 1221.99C864.201 1259.36 915.014 1278.28 983.305 1278.28C1058.36 1278.28 1132.11 1259.11 1201.48 1231.5Z" fill="var(--icon-huggingface-color, currentColor)"/>
+    <path d="M635.221 1179.69C670.856 1127.23 668.331 1087.85 619.437 1038.79C570.542 989.739 542.081 917.979 542.081 917.979C542.081 917.979 531.45 876.301 507.236 880.136C483.022 883.971 465.244 946.254 515.964 984.357C566.684 1022.45 505.864 1048.33 486.35 1012.55C466.836 976.778 413.552 884.803 385.92 867.214C358.3 849.625 338.851 859.479 345.365 895.736C351.878 931.993 467.393 1019.87 456.154 1038.89C444.914 1057.9 405.304 1016.55 405.304 1016.55C405.304 1016.55 281.359 903.302 254.374 932.812C227.389 962.322 274.846 987.048 342.477 1028.15C410.121 1069.25 415.365 1080.1 405.77 1095.65C396.162 1111.2 246.864 984.825 232.84 1038.4C218.83 1091.97 385.208 1107.52 374.939 1144.5C364.671 1181.5 257.741 1074.5 235.87 1116.19C213.987 1157.89 386.762 1206.89 388.16 1207.25C443.969 1221.79 585.705 1252.59 635.221 1179.69Z" fill="var(--icon-huggingface-color, currentColor)"/>
+    <path d="M864.806 1179.69C829.171 1127.23 831.696 1087.85 880.591 1038.79C929.485 989.739 957.946 917.979 957.946 917.979C957.946 917.979 968.577 876.301 992.791 880.136C1017.01 883.971 1034.78 946.254 984.064 984.357C933.344 1022.45 994.164 1048.33 1013.68 1012.55C1033.19 976.778 1086.47 884.803 1114.11 867.214C1141.73 849.625 1161.18 859.479 1154.66 895.736C1148.15 931.993 1032.63 1019.87 1043.87 1038.89C1055.11 1057.9 1094.72 1016.55 1094.72 1016.55C1094.72 1016.55 1218.67 903.302 1245.65 932.812C1272.64 962.322 1225.18 987.048 1157.55 1028.15C1089.91 1069.25 1084.66 1080.1 1094.26 1095.65C1103.87 1111.2 1253.16 984.825 1267.19 1038.4C1281.2 1091.97 1114.82 1107.52 1125.09 1144.5C1135.36 1181.5 1242.29 1074.5 1264.16 1116.19C1286.04 1157.89 1113.27 1206.89 1111.87 1207.25C1056.06 1221.79 914.322 1252.59 864.806 1179.69Z" fill="var(--icon-huggingface-color, currentColor)"/>
+    <path d="M675.913 853.201C679.674 855.39 683.766 857.524 688.891 860.001C705.59 868.074 725.878 873.106 750.564 873.106C777.366 873.106 799.015 867.175 816.53 857.819C821.193 855.328 825.305 852.779 828.701 850.52C818.286 841.142 806.116 833.688 792.747 828.717C791.172 828.131 789.58 827.58 787.973 827.064C782.46 825.295 776.761 834.148 770.915 843.232C765.317 851.929 759.582 860.838 753.744 860.838C748.268 860.838 742.882 851.802 737.615 842.964C732.157 833.804 726.824 824.857 721.649 826.403C704.266 831.599 688.648 840.906 675.913 853.201Z" fill="var(--icon-huggingface-color, currentColor)"/>
+    <path fill-rule="evenodd" clip-rule="evenodd" d="M849.695 285.599C816.641 277.833 782.184 273.727 746.772 273.727C684.644 273.727 625.458 286.368 571.624 309.227C448.998 361.299 354.15 466.394 315.593 595.883C303.37 636.933 296.805 680.435 296.805 725.476C296.805 761.974 301.116 797.461 309.255 831.452C309.366 831.317 309.477 831.183 309.587 831.05C322.652 815.372 341.389 806.727 362.353 806.727C379.135 806.727 396.395 812.304 413.669 823.302C425.128 830.608 437.792 843.556 450.832 859.832C462.913 843.01 479.824 831.83 499.169 828.775C502.872 828.19 506.628 827.891 510.344 827.891H510.357C554.525 827.891 581.096 866.358 591.144 900.964C596.129 912.651 620.058 965.899 656.056 1002.01C710.873 1057.01 724.595 1113.75 697.461 1174.54C713.655 1176.32 730.108 1177.23 746.772 1177.23C747.445 1177.23 748.117 1177.22 748.789 1177.22L749.307 1177.22L750.29 1177.21C767.865 1177.08 785.2 1175.93 802.241 1173.83C775.534 1113.31 789.363 1056.8 843.964 1002.01C879.962 965.899 903.891 912.651 908.876 900.964C918.924 866.358 945.495 827.891 989.663 827.891H989.676C993.392 827.891 997.147 828.19 1000.85 828.775C1020.2 831.83 1037.11 843.01 1049.19 859.832C1062.23 843.556 1074.89 830.608 1086.35 823.302C1103.62 812.304 1120.89 806.727 1137.67 806.727C1156.17 806.727 1172.94 813.46 1185.6 825.819C1192.89 793.547 1196.74 759.963 1196.74 725.476C1196.74 709.883 1195.95 694.474 1194.42 679.288C1174.88 486.115 1034.11 328.922 849.695 285.599ZM652.93 884.744C603.394 843.337 581.677 781.979 581.677 742.068C581.677 711.101 602.797 721.605 636.467 738.35C666.402 753.238 706.256 773.059 750.01 773.059C793.763 773.059 833.618 753.238 863.553 738.35C897.223 721.605 918.343 711.101 918.343 742.068C918.343 780.4 900.71 842.529 852.745 880.809C827.567 900.728 794.093 914.485 750.509 914.485C709.56 914.485 677.534 902.691 652.93 884.744ZM919.726 619.809C914.761 612.591 909.541 605.002 902.523 602.514C896.04 600.216 887.549 603.626 879.395 606.901C868.994 611.078 859.142 615.035 854.701 606.649C837.914 574.953 849.899 535.595 881.471 518.742C913.042 501.889 952.244 513.922 969.031 545.618C985.818 577.315 973.833 616.672 942.261 633.525C932.68 638.64 926.437 629.564 919.726 619.809ZM597.494 602.514C590.477 605.002 585.256 612.591 580.291 619.809C573.581 629.564 567.337 638.64 557.756 633.525C526.185 616.672 514.2 577.315 530.986 545.618C547.773 513.922 586.975 501.889 618.547 518.742C650.118 535.595 662.103 574.953 645.317 606.649C640.876 615.035 631.023 611.078 620.623 606.901C612.468 603.626 603.977 600.216 597.494 602.514ZM1093.15 621.477C1093.15 644.811 1074.31 663.727 1051.07 663.727C1027.83 663.727 1008.98 644.811 1008.98 621.477C1008.98 598.143 1027.83 579.227 1051.07 579.227C1074.31 579.227 1093.15 598.143 1093.15 621.477ZM448.95 663.727C472.192 663.727 491.033 644.811 491.033 621.477C491.033 598.143 472.192 579.227 448.95 579.227C425.708 579.227 406.866 598.143 406.866 621.477C406.866 644.811 425.708 663.727 448.95 663.727Z" fill="var(--icon-huggingface-color, currentColor)"/>
+</symbol>
+</svg>
+  <main class="project">
+
+    <h1 class="project-title">Magnitude-preserving Discriminators Enable Efficient GANs</h1>
+    <p class="venue">NeurIPS 2026</p>
+
+    <div class="authors">
+      <span class="author"><a href="https://scholar.google.com/citations?user=eEFHDgj_mr0C&amp;hl=en">Nick Yiwen Huang</a>,</span>
+      <span class="author"><a href="https://www.linkedin.com/in/jackson-woodleigh">Jackson Woodleigh</a><sup>∗</sup>,</span>
+      <span class="author"><a href="https://skylion007.github.io/">Aaron Gokaslan</a><sup>∗†</sup>,</span>
+      <span class="author"><a href="https://www.linkedin.com/in/xinjie-yi-396447176">Xinjie Yi</a><sup>‡</sup>,</span>
+      <span class="author"><a href="https://jamestompkin.com/">James Tompkin</a></span>
+    </div>
+    <p class="affiliations">Brown University &nbsp; <sup>†</sup>Modal &nbsp; <sup>‡</sup>Independent &nbsp; <sup>∗</sup>Equal&nbsp;contribution</p>
+
+    <nav class="resource-row">
+      <a href="#">Paper</a>
+      <a href="#" aria-label="arXiv"><svg class="logo wm-arxiv" aria-hidden="true"><use href="#icon-arxiv"/></svg></a>
+      <a href="https://openreview.net/forum?id=fnr7DvbHE3" aria-label="OpenReview"><svg class="logo wm-openreview" aria-hidden="true"><use href="#icon-openreview"/></svg></a>
+      <a href="https://github.com/brownvc/R3GAN2"><svg class="logo mark" aria-hidden="true"><use href="#icon-github"/></svg>Code</a>
+      <a href="#"><svg class="logo mark" aria-hidden="true"><use href="#icon-huggingface"/></svg>Weights</a>
+      <a href="map.html">Live generator</a>
+    </nav>
+
+    <!-- Claims (system table): DiT-XL/2 with guidance ~190x the TFLOPs of R3GAN2-S at about the same FID; R3GAN2-L (FID 1.52,
+         131 M, no guidance) and R3GAN2-M (1.60, 61 M) against the best one-step flow models, both guided: FACM-XL/2
+         1.72 with 675 M (L 5.2x, M 11x) and iMF-XL/2 1.82 with 610 M (L 4.7x, M 10x): 5-10x. (At two steps FACM reaches 1.34, so the line must say one-step.) -->
+    <div class="takehome">
+      <p class="lead">Efficiency without tricks</p>
+      <p>190&times; less compute than <span class="nw">guided diffusion<sup><a data-ref="dit"></a></sup></span> at the same FID</p>
+      <p>5&ndash;10&times; fewer parameters than <span class="nw">guided one-step flow models<sup><span data-refs="imf facm"></span></sup></span> at the same FID</p>
+    </div>
+
+    <figure class="teaser" id="samples-section">
+      <h2 id="samples" class="vh">Samples</h2>
+      <div class="controls"><span class="seg" id="fig8cls" role="group" aria-label="Class"></span></div>
+      <div id="fig8"></div>
+      <figcaption>Class-conditional ImageNet 256&times;256.</figcaption>
+    </figure>
+
+    <p class="takehome unguided">Guidance trades diversity for fidelity: it pushes each sample toward the most typical
+      images of its class, which FID can reward. An efficient generative model should learn the underlying
+      distribution without that help.</p>
+
+    <section id="speed-section">
+      <h2 id="speed">Speed</h2>
+      <p class="sub">Ideal time per image at a sustained 20&nbsp;TFLOP/s, from each method’s compute, with every latent model using a tiny distilled decoder (TAESD&nbsp;<a data-ref="taesd"></a>, TAEF2&nbsp;<a data-ref="taef2"></a> or the like). FIDs are with each method’s full decoder.</p>
+      <div class="controls"><span class="seg" id="tiers" role="group" aria-label="FID level"></span><button class="plain" id="restart" type="button">Restart</button></div>
+      <div class="panels" id="panels"></div>
+    </section>
+
+    <section id="map-section">
+      <h2 id="map">GANdscape</h2>
+      <p>R3GAN2 is fast enough to fill a zoomable map of all 1,000 ImageNet classes live in your browser.</p>
+      <p class="go"><a href="map.html">Open the ImageNet GANdscape</a></p>
+      <a class="map-video" href="map.html" aria-label="Open the ImageNet GANdscape">
+        <video src="./videos/map.mp4" poster="./videos/map-poster.jpg" autoplay muted loop playsinline preload="metadata" aria-label="The map being explored: zooming out to all 1,000 classes and panning across it"></video>
+      </a>
+    </section>
+
+    <section id="demo-section">
+      <h2 id="demo">Generator</h2>
+      <p>Pick a class and walk through R3GAN2’s latent space, generated on your own GPU in the browser.</p>
+      <iframe class="generator" id="demo-frame" title="R3GAN2 live sample generator" allow="fullscreen" scrolling="no"></iframe>
+    </section>
+
+    <section id="abstract-section">
+      <h2 id="abstract">Abstract</h2>
+      <p>GANs are appealing because they generate sharp images with a single forward execution. Recent works have
+        stabilized GAN training, but FID may still plateau on diverse datasets like ImageNet-256 even as training
+        remains stable. We identify severe growth of discriminator activation magnitudes as a hidden pathology
+        accompanying this plateau. Our analysis shows that adversarial training permits the discriminator to increase
+        empirical real&ndash;fake separation by amplifying already-discriminative responses, without necessarily
+        improving the underlying representation. Motivated by this observation, we redesign R3GAN&rsquo;s network
+        components to preserve activation magnitudes statistically. Across a roadmap of configurations, we perform
+        diagnostic ablations showing that the gains depend primarily on the discriminator redesign. We train all
+        generators and discriminators from scratch, without pretrained discriminator features. The resulting R3GAN2
+        models reach FIDs of 2.12 with 17&nbsp;M parameters, 1.60 with 61&nbsp;M, and 1.52 with 131&nbsp;M on
+        class-conditional ImageNet-256. At 1 NFE, this is substantially more efficient than competing diffusion and
+        autoregressive methods, and than prior GAN baselines too (e.g., 10&times; fewer parameters than StyleGAN-XL
+        for similar FID). We also train directly in pixel space, achieving FIDs of 1.65 on CIFAR-10 and 2.19 on FFHQ
+        256&times;256, where our generator achieves comparable FID to StyleGAN-XL with fewer than half as many
+        parameters. In sum, identifying and removing this discriminator magnitude pathology yields a new SOTA in
+        FID/parameter efficiency for GANs.</p>
+    </section>
+
+    <section id="citation-section">
+      <h2 id="citation">Citation</h2>
+      <pre class="citation"><code>@inproceedings{huang2026magnitude,
+    title     = {Magnitude-preserving Discriminators Enable Efficient {GAN}s},
+    author    = {Huang, Nick Yiwen and Woodleigh, Jackson and Gokaslan, Aaron and Yi, Xinjie and Tompkin, James},
+    booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+    year      = {2026}
+}</code></pre>
+    </section>
+
+    <section id="acknowledgements-section">
+      <h2 id="acknowledgements">Acknowledgements</h2>
+      <p>NSF CAREER-2144956 and Google’s TPU Research Cloud.</p>
+      <p>The live generators decode with <a href="https://huggingface.co/madebyollin/taef2">TAEF2</a>
+        (Ollin Boer Bohan, MIT licence) and the <a href="https://huggingface.co/black-forest-labs/FLUX.2-dev">FLUX.2</a>
+        autoencoder (Black Forest Labs). Our weights: ImageNet models CC BY-NC 4.0, FFHQ model CC BY-NC-SA 4.0.</p>
+    </section>
+
+    <section id="references-section">
+      <h2 id="references">References</h2>
+      <ol class="refs" id="refs"></ol>
+    </section>
+
+    <footer class="logos" data-logos="brown-cs nsf"></footer>
+
+  </main>
+  <script type="module" src="page.js"></script>
+</body>
+</html>

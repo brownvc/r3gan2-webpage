@@ -1,0 +1,998 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="data:,">
+<base target="_top">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>R3GAN2 live sample generator</title>
+<!-- Shown inside the project page (index.html) once a reader loads it: lab fonts and shared stylesheet, no brand bar. -->
+<link rel="stylesheet" href="https://use.typekit.net/diw5pgv.css">
+<link rel="stylesheet" href="https://visual.cs.brown.edu/projects/shared/project.css">
+<script>
+  (function () { var t; try { t = localStorage.getItem('theme'); } catch (e) {} var dark = t === 'dark' || (!t && matchMedia('(prefers-color-scheme: dark)').matches); document.documentElement.setAttribute('data-bs-theme', dark ? 'dark' : 'light'); })();
+</script>
+<style id="page-skin">
+  /* BVC tokens (--accent, --ink, --ink-muted, --bg, --bg-soft, --border, fonts) come from project.css.
+     The demo adds only --live, for walking and loading, in both themes. */
+  :root { --live: #9A6700; --img: 384px; --group: calc(var(--img) + 28px + 340px); --edge: max(20px, calc((100% - var(--group)) / 2)); }
+  :root[data-bs-theme="dark"] { --live: #E8B04A; }
+
+  /* Bar, header, main, footer as a full-height column: main takes the space left, so the footer is never pushed off. */
+  body { display: flex; flex-direction: column; }
+  .bvc-bar { margin-bottom: 1.6rem; }
+  button, input, select { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  header { padding: 0 var(--edge); }
+  header .takeaway { text-align: center; margin: 0.7em auto 0; max-width: 46em; text-wrap: balance; }
+  .nw { white-space: nowrap; }
+  /* Left edge = the image's. At 13px the line is as wide as the 384px image (383.9px measured in Freight Sans). */
+  header .topnote { text-align: left; margin: 1.1em 0 0; color: var(--ink-muted); font-size: 13px; white-space: nowrap; }
+  header .resource-row { margin: 0.9em 0 0.4em; }
+  /* The Cite button matches project.css's resource-row links. */
+  .resource-row button { padding: 0.4em 1.1em; border: 1px solid var(--accent); border-radius: 6px; background: none; color: var(--accent); font-weight: 600; cursor: pointer; }
+  .resource-row button:hover { background: var(--accent); color: var(--bg); }
+  header pre.citation { max-width: var(--group); }
+  /* Explore: links to the other two pages, under the paper links. */
+  header .explore { text-align: center; margin: 0.2em 0 0; font-size: 15px; color: var(--ink-muted); }
+  header .explore a { color: var(--accent); font-weight: 600; text-decoration: none; }
+  header .explore a:hover { text-decoration: underline; }
+  header .explore .sep { margin: 0 0.5em; }
+
+  /* One centred group: the image column and the controls panel side by side. */
+  main { display: flex; justify-content: center; align-items: flex-start; gap: 28px; padding: 6px 20px 28px; flex: 1; font-size: 16px; line-height: 1.5; }
+  .stage { width: var(--img); max-width: 100%; display: flex; flex-direction: column; gap: 12px; }
+  .frame { position: relative; width: 100%; aspect-ratio: 1; }
+  #cv { width: 100%; height: 100%; display: block; border-radius: 6px; background: var(--bg-soft); border: 1px solid var(--border); }
+  /* Overlays sit on the image, so they keep a fixed dark backdrop in both themes. */
+  #status { position: absolute; left: 0; right: 0; bottom: 0; padding: 8px 12px; background: rgba(33, 37, 41, 0.85); color: #E8B04A; font-weight: 600; border-radius: 0 0 6px 6px; }
+  #status:empty { display: none; }
+  /* Asks before a download: over the empty image until a model is loaded */
+  #loadgate { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); font: inherit; font-weight: 600; color: var(--bg);
+    background: var(--accent); border: 0; border-radius: 6px; padding: 0.6em 1.2em; cursor: pointer; text-align: center; }
+  #loadgate:hover { background: var(--accent-hover); }
+  #loadgate small { display: block; font-weight: 400; opacity: 0.85; }
+  #fps { position: absolute; top: 8px; right: 8px; padding: 1px 9px; border-radius: 999px; background: rgba(33, 37, 41, 0.8); color: #fff; font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  #fps:empty { display: none; }
+  /* Full FLUX.2 decoder image over the live one: fades in, disappears at once. */
+  /* Same box as #cv, border included, so the two images line up pixel for pixel. */
+  #hq { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 6px; border: 1px solid var(--border); opacity: 0; pointer-events: none; }
+  #hq.on { opacity: 1; transition: opacity 0.4s; }
+  #hq.now { transition: none; }  /* the tick box switches at once */
+  /* Decoder switch in the row under the image: a small Loop/Wander-style pair. */
+  .stage .seg button { border: 0; border-right: 1px solid var(--border); border-radius: 0; padding: 5px 8px; font-size: 14.5px; }
+  /* The row under the image is full: Save and Copy are pushed right by a margin (a spacer would cost a gap), and the
+     "Link copied" message sits just under the row instead of in it. */
+  .stage .bar { position: relative; }
+  .stage .bar #save { margin-left: auto; }
+  #shared { position: absolute; right: 0; top: calc(100% - 4px); font-size: 13px; line-height: 1; }
+  .stage .seg button:last-child { border-right: 0; }
+  /* FLUX.2 chosen but a TAEF2 frame on screen (walking, changing, decoding): FLUX.2 pales and TAEF2 takes the accent. */
+  #decseg .dbtn { transition: background-color 0.4s, color 0.4s; }
+  #decseg.live .dbtn[data-d=flux2] { background: color-mix(in srgb, var(--accent) 30%, var(--bg)); color: var(--ink); }
+  #decseg.live .dbtn[data-d=taef2] { color: var(--accent); }
+
+  .bar { width: 100%; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .bar .spacer { flex: 1; }
+  .stage button, .rail button.plain { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 5px 11px; cursor: pointer; white-space: nowrap; }
+  .stage button:hover, .rail button.plain:hover { border-color: var(--accent); color: var(--accent); }
+  #save, #share { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  #save:hover, #share:hover { background: var(--accent); color: var(--bg); }
+  .seeds { width: 100%; display: grid; grid-template-columns: auto 5em 1fr; gap: 6px 8px; align-items: center; color: var(--ink-muted); }
+  .seeds .btns { display: flex; gap: 6px; }
+  .seeds button { padding: 2px 9px; }
+  #prev, #next, #nprev, #nnext { min-width: 2.2em; font-weight: 700; }
+  input[type=number], input[type=search], .rail select { width: 100%; background: var(--bg); color: var(--ink); border: 1px solid var(--border); border-radius: 6px; padding: 3px 7px; font-variant-numeric: tabular-nums; }
+  #shared { color: var(--live); white-space: nowrap; }
+
+  /* The walk dial: the loop angle as a dot on a circle; click to play or pause. */
+  .stage #dial { width: 46px; height: 46px; padding: 0; border-radius: 50%; display: grid; place-items: center; }
+  #dial svg { width: 40px; height: 40px; }
+  #dial .ring { fill: none; stroke: var(--ink-muted); stroke-width: 1.5; }
+  #dial .trail { fill: none; stroke: var(--live); stroke-width: 1.5; opacity: 0.6; }
+  #dial .dot, #dial .icon { fill: var(--ink); }
+  #dial.on .dot { fill: var(--live); }
+
+  .keys { display: grid; grid-template-columns: auto 1fr; gap: 1px 12px; margin: -2px 0 0; color: var(--ink-muted); font-size: 14.5px; }
+  .keys dt { font-weight: 600; }
+  .keys dd { margin: 0; }
+  .rail .keys { margin-top: 6px; }
+  .film .cap { color: var(--ink-muted); margin: 0 0 6px; }
+  .film .cap:empty { display: none; }
+  #gridcells { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
+  #gridcells canvas { width: 100%; aspect-ratio: 1; display: block; border-radius: 3px; cursor: pointer; outline: 2px solid transparent; }
+  #gridcells canvas:hover { outline-color: var(--accent); }
+  #gridcells canvas.cur { outline-color: var(--live); }
+
+  .rail { width: 340px; max-width: 100%; padding: 16px 20px 6px; background: var(--bg-soft); border: 1px solid var(--border); border-radius: 8px; }
+  .rail section { padding: 0 0 14px; margin: 0 0 14px; border-bottom: 1px solid var(--border); }
+  .rail section:last-child { border-bottom: 0; margin-bottom: 0; padding-bottom: 10px; }
+  /* project.css centres section headings with a rule; the panel's are plain left-aligned labels. */
+  .rail section > h2 { text-align: left; font-size: 21px; margin: 0 0 6px; padding: 0; border: 0; }
+  .meta { color: var(--ink-muted); margin: 6px 0 0; font-variant-numeric: tabular-nums; }
+  .seg { display: flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+  .seg button { flex: 1; border: 0; border-right: 1px solid var(--border); background: var(--bg); padding: 6px 0; cursor: pointer; }
+  .seg button:last-child { border-right: 0; }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: var(--bg); font-weight: 600; }
+  .seg button:disabled { opacity: 0.4; cursor: default; }  /* e.g. Class tour with the faces model */
+  .segsub { display: flex; margin-top: 4px; }  /* download size or "saved", one cell under each model button */
+  .segsub span { flex: 1; text-align: center; font-size: 12.5px; line-height: 1.3; color: var(--ink-muted); }
+  .seg button small { display: block; font-size: 12.5px; font-weight: 400; opacity: 0.8; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 10px; }
+  .chips button { border: 1px solid var(--border); background: var(--bg); border-radius: 999px; padding: 2px 11px; cursor: pointer; }
+  .chips button:hover { border-color: var(--accent); color: var(--accent); }
+  .row { display: flex; align-items: center; gap: 10px; margin: 8px 0 0; }
+  .row label { white-space: nowrap; }
+  .row input[type=range] { flex: 1; min-width: 0; accent-color: var(--accent); }
+  /* Where the image is while it catches up with the thumb (see the sliders section of the script). */
+  .row { position: relative; }
+  .ghost { position: absolute; z-index: 1; box-sizing: border-box; width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%; background: var(--bg); border: 2px solid var(--ink); pointer-events: none; display: none; }
+  .val { width: 3.2em; text-align: right; color: var(--ink-muted); font-variant-numeric: tabular-nums; }
+  details .val { width: 6.6em; white-space: nowrap; }  /* "1 (as trained)" on one line; the three sliders still line up */
+  .help { color: var(--ink-muted); font-size: 14.5px; margin: 4px 0 0; }
+  /* Speed table: below the demo, on the footer's edges. */
+  .perf { padding: 0 var(--edge) 22px; font-size: 16px; line-height: 1.5; }
+  .perf > h2 { text-align: left; font-size: 21px; margin: 0 0 4px; padding: 0; border: 0; }
+  .perf p { color: var(--ink-muted); font-size: 14.5px; margin: 0 0 6px; }
+  .perf .scroll { overflow-x: auto; }  /* the table scrolls sideways on narrow screens */
+  .perf td:first-child { white-space: nowrap; }
+  .perf td.same { color: var(--ink-muted); opacity: 0.6; padding-left: 30px; }  /* ditto: the same as the row above */
+  .perf table { border-collapse: collapse; font-variant-numeric: tabular-nums lining-nums; }  /* Freight's default figures are old-style */
+  .perf th, .perf td { padding: 3px 0 3px 22px; text-align: right; border-bottom: 1px solid var(--border); }
+  .perf th:nth-child(-n+3), .perf td:nth-child(-n+3) { text-align: left; }
+  .perf th:first-child, .perf td:first-child { padding-left: 0; }
+  .perf th { font-weight: 600; }
+  html { background: var(--bg); }  /* no dark strip below the body inside the project page's frame */
+  /* project.css sets overscroll-behavior-y: none on html, which inside the project page's frame stops the wheel ever
+     reaching the page: over the generator the page would not scroll. Restore the default here. */
+  html { overscroll-behavior-y: auto; }
+  details > summary { cursor: pointer; font-family: var(--font-head); font-size: 21px; }
+  details[open] > summary { margin-bottom: 6px; }
+  /* subsection titles inside Advanced, as on the map: above their controls in size */
+  details h3 { font-family: var(--font-head); font-size: 18px; font-weight: 400; color: var(--ink); margin: 18px 0 6px; padding: 0; border: 0; text-align: left; }
+  details h3:first-of-type { margin-top: 8px; }
+  .checks label { display: block; margin: 4px 0; }
+  .checks input { margin: 0 6px 0 0; }
+  .tools { display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; align-items: center; margin-top: 10px; }
+  .tools span { color: var(--ink-muted); font-size: 14.5px; line-height: 1.35; }
+  #log { font-size: 12px; white-space: pre-wrap; max-height: 220px; overflow: auto; margin: 10px 0 0; padding: 8px; }
+  #log:empty { display: none; }
+
+  footer { padding: 0 var(--edge) 20px; color: var(--ink-muted); font-size: 14.5px; }
+  footer .inner { border-top: 1px solid var(--border); padding-top: 12px; }
+  .credits { display: grid; grid-template-columns: auto 1fr; gap: 2px 14px; margin: 0; }
+  .credits dt { font-weight: 600; }
+  .credits dd { margin: 0; }
+
+  @media (max-width: 800px) {
+    main { flex-direction: column; align-items: center; }
+  }
+  @media (max-width: 500px) {  /* a phone: the note wraps, the seed rows stack their buttons under the box */
+    header .topnote { white-space: normal; }
+    .seeds { grid-template-columns: auto 1fr; }
+    .seeds .btns { grid-column: 1 / -1; }
+  }
+  .seeds label { white-space: nowrap; }
+</style>
+</head>
+<body>
+<header>
+  <p class="topnote" id="topnote">Note: Uncurated ImageNet samples are notoriously rough across methods.</p>
+</header>
+<main>
+  <div class="stage">
+    <div class="frame">
+      <canvas id="cv" width="256" height="256"></canvas>
+      <canvas id="hq" width="256" height="256"></canvas>
+      <div id="status" role="status"></div>
+      <div id="fps" title="Frames per second"></div>
+    </div>
+    <div class="bar">
+      <button id="dial" title="Start or stop the walk (space)" aria-label="Start or stop the walk">
+        <svg viewBox="-20 -20 40 40" aria-hidden="true">
+          <circle class="ring" r="15"></circle>
+          <polyline class="trail" id="dialtrail" points=""></polyline>
+          <circle class="dot" id="dialdot" cx="15" cy="0" r="3.2"></circle>
+          <path class="icon" id="dialicon" d="M-3.5,-5 L5,0 L-3.5,5 Z"></path>
+        </svg>
+      </button>
+      <div class="seg" id="decseg" role="group" aria-label="Decoder"><button class="dbtn" data-d="taef2" title="TAEF2: the fast decoder, used for every live frame">TAEF2</button><button class="dbtn" data-d="flux2" title="FLUX.2: the full decoder (FP32), shown once the image is still">FLUX.2</button></div>
+      <input id="refine" type="checkbox" checked hidden>
+      <span id="shared" aria-live="polite"></span>
+      <button id="save" title="Save this image as a PNG">Save image</button>
+      <button id="share" title="Copy a link to this exact image, with its model, seeds, classes and settings">Copy link</button>
+    </div>
+    <div class="seeds">
+      <label for="zseed">z seed</label><input id="zseed" type="number" min="0" step="1">
+      <span class="btns"><button id="prev" title="Previous z seed (left arrow)" aria-label="Previous z seed">&lsaquo;</button><button id="next" title="Next z seed (right arrow)" aria-label="Next z seed">&rsaquo;</button><button id="newz" title="Random z seed (Z)">Random sample</button></span>
+      <label for="nseed">Noise seed</label><input id="nseed" type="number" min="0" step="1">
+      <span class="btns"><button id="nprev" title="Previous noise seed (Shift + left arrow)" aria-label="Previous noise seed">&lsaquo;</button><button id="nnext" title="Next noise seed (Shift + right arrow)" aria-label="Next noise seed">&rsaquo;</button><button id="newn" title="Random noise seed (N)">Random noise</button></span>
+    </div>
+    <div class="film">
+      <p class="cap" id="gridinfo"></p>
+      <div class="bar" style="margin-bottom: 6px;">
+        <button id="grid">Show 16 samples</button>
+        <button id="gridnext">Next 16</button>
+      </div>
+      <div id="gridcells"></div>
+    </div>
+  </div>
+
+  <aside class="rail">
+    <section>
+      <h2>Model</h2>
+      <div class="seg" role="group" aria-label="Model">
+        <button class="mbtn" data-m="s" title="ImageNet, small">S<small>FID 2.12</small></button><button class="mbtn" data-m="m" title="ImageNet, medium">M<small>FID 1.60</small></button><button class="mbtn" data-m="l" title="ImageNet, large">L<small>FID 1.52</small></button><button class="mbtn" data-m="ffhq" title="Faces">FFHQ<small>FID 2.19</small></button>
+      </div>
+      <div class="segsub"><span data-m="s">75 MB download</span><span data-m="m">249 MB download</span><span data-m="l">528 MB download</span><span data-m="ffhq">107 MB download</span></div>
+      <p class="meta"><span id="modelmeta"></span></p>
+    </section>
+
+    <section id="classrow">
+      <h2>Class (1 of 1,000)</h2>
+      <input id="csearch" type="search" list="cnames" placeholder="Search 1,000 ImageNet classes" aria-label="Class">
+      <datalist id="cnames"></datalist>
+      <select id="ca" hidden></select>
+      <div class="chips" aria-label="Classes from the paper’s figure">
+        <button class="pc" data-c="207">golden retriever</button><button class="pc" data-c="88">macaw</button><button class="pc" data-c="1">goldfish</button><button class="pc" data-c="980">volcano</button><button class="pc" data-c="985">daisy</button>
+      </div>
+      <div class="row"><label for="cbsearch">Blend toward</label><input id="cbsearch" type="search" list="cnames" placeholder="Search classes" style="flex: 1; min-width: 0;"></div>
+      <select id="cb" hidden></select>
+      <div class="row"><input id="t" type="range" min="0" max="1" step="0.01" value="0" aria-label="Blend amount"><span class="ghost" id="tg"></span><span class="val" id="tv">0.00</span></div>
+    </section>
+
+    <section>
+      <h2>Walk</h2>
+      <input id="walk" type="checkbox" hidden>
+      <div class="seg" role="group" aria-label="Walk mode">
+        <button class="wbtn" data-w="loop">Loop</button><button class="wbtn" data-w="wander">Wander</button><button class="wbtn" data-w="tour">Class tour</button>
+      </div>
+      <select id="walkmode" hidden><option value="loop">loop</option><option value="wander">wander</option><option value="tour">tour</option></select>
+      <div class="row"><label for="speed">Speed</label><input id="speed" type="range" min="0" max="3" step="0.01" value="0.3"><span class="val" id="speedv">0.30</span></div>
+      <dl class="keys">
+        <dt>Loop</dt><dd>Great circle on the <i>z</i> sphere, through this sample and a second random one.</dd>
+        <dt>Wander</dt><dd>Random walk on the <i>z</i> sphere, with a slowly drifting heading.</dd>
+        <dt>Class tour</dt><dd>Wander, while the class blends into a new random one every few seconds.</dd>
+      </dl>
+    </section>
+
+    <section>
+      <details>
+        <summary>Advanced</summary>
+        <h3>Truncation</h3>
+        <div class="row"><label for="tz">z truncation</label><input id="tz" type="range" min="0.1" max="4" step="0.05" value="4"><span class="ghost" id="tzg"></span><span class="val" id="tzv">off</span></div>
+        <p class="help">Redraw z values beyond &plusmn;t. Lower: more typical, less varied.</p>
+        <div class="row"><label for="tn">Noise truncation</label><input id="tn" type="range" min="0.1" max="4" step="0.05" value="4"><span class="ghost" id="tng"></span><span class="val" id="tnv">off</span></div>
+        <p class="help">Same for per-pixel noise. Mostly fine detail.</p>
+        <div class="row"><label for="psi">Scale ψ</label><input id="psi" type="range" min="0" max="2" step="0.01" value="1"><span class="ghost" id="psig"></span><span class="val" id="psiv">1 (as trained)</span></div>
+        <p class="help">Scales z. At 1, samples sit where the model was trained.</p>
+        <div id="inopts">
+        <h3>Decoders</h3>
+        <div class="checks"><label><input id="full" type="checkbox"> FLUX.2 for every frame (slow)</label></div>
+        <h3>Precision</h3>
+        <div class="checks">
+          <label><input id="th16" type="checkbox" checked> FP16 TAEF2 decoder</label>
+          <label><input id="gh16" type="checkbox"> FP16 generator (less accurate)</label>
+        </div>
+        </div>
+        <h3>Tools</h3>
+        <div class="tools">
+          <button id="check" class="plain">Check</button><span>Compare with PyTorch output</span>
+          <button id="bench" class="plain">Benchmark</button><span>Time this model</span>
+          <button id="report" class="plain">Speed report</button><span>Time all models, FP32 and FP16; copy result. Asks before downloading.</span>
+        </div>
+        <pre id="log"></pre>
+      </details>
+    </section>
+  </aside>
+</main>
+<section class="perf">
+  <h2>Speed in your browser</h2>
+  <p>Images per second measured on these devices.<br>The TAEF2 decoder runs in FP16 in Chrome and FP32 in Firefox, and FFHQ has no FP16 generator.</p>
+  <div class="scroll"><table>
+    <thead><tr><th>GPU</th><th>Browser</th><th>Generator</th><th>S</th><th>M</th><th>L</th><th>FFHQ</th></tr></thead>
+    <tbody>
+      <tr><td>NVIDIA RTX 3080 (desktop)</td><td>Chrome 157</td><td>FP32</td><td>173.2</td><td>96.6</td><td>59.2</td><td>54.1</td></tr>
+      <tr><td>NVIDIA RTX 3080 (desktop)</td><td>Chrome 157</td><td>FP16</td><td>188.2</td><td>109.7</td><td>70.9</td><td>–</td></tr>
+      <tr><td>AMD Radeon 880M (laptop)</td><td>Chrome 157</td><td>FP32</td><td>36.5</td><td>18.8</td><td>8.3</td><td>6.5</td></tr>
+      <tr><td>AMD Radeon 880M (laptop)</td><td>Chrome 157</td><td>FP16</td><td>40.8</td><td>21.8</td><td>13.0</td><td>–</td></tr>
+      <tr><td>Intel Xe2-LPG (laptop)</td><td>Chrome 157</td><td>FP32</td><td>38.1</td><td>20.5</td><td>7.7</td><td>7.0</td></tr>
+      <tr><td>Intel Xe2-LPG (laptop)</td><td>Chrome 157</td><td>FP16</td><td>41.4</td><td>24.8</td><td>11.2</td><td>–</td></tr>
+      <tr><td>Arm Mali-G710 MP7 (Pixel 7 phone)</td><td>Chrome 156</td><td>FP32</td><td>4.1</td><td>2.1</td><td>0.7</td><td>0.4</td></tr>
+      <tr><td>Arm Mali-G710 MP7 (Pixel 7 phone)</td><td>Chrome 156</td><td>FP16</td><td>4.9</td><td>3.0</td><td>1.1</td><td>–</td></tr>
+      <tr><td>AMD Radeon 880M (laptop)</td><td>Firefox 159</td><td>FP32</td><td>10.0</td><td>4.0</td><td>1.8</td><td>1.7</td></tr>
+    </tbody>
+  </table></div>
+</section>
+<script>
+  // A device or browser repeated exactly in the row above shows as a muted ditto mark (the full text stays for tooltips
+  // and screen readers), so each device reads as one group. Text columns only: equal numbers are a coincidence.
+  document.querySelectorAll('.perf tbody tr').forEach(function (tr) {
+    var up = tr.previousElementSibling; if (!up) return;
+    for (var c = 0; c < 2; c++) {  // the browser only within one device's rows
+      var td = tr.cells[c], above = up.cells[c];
+      var text = td.dataset.full || td.textContent, textAbove = above.dataset.full || above.textContent;
+      if (text === textAbove && (c === 0 || tr.cells[0].className === 'same')) { td.dataset.full = text; td.title = text; td.setAttribute('aria-label', text); td.textContent = '″'; td.className = 'same'; }
+    }
+  });
+</script>
+<script type="module">
+import { createFastGAN } from './fastgan.js?v=20261118c';
+import { DATA } from './config.js';
+import { cachedBytes as stored, gauss, savedInBrowser, gpuLostNotice, scoped, gpuLabel, SMALL_DEVICE } from './lab.js?v=20261121a';  // one copy of the storage code
+const data = (f) => DATA + f;  // weights, embeddings, test vectors, decoder
+const log = (s) => { document.getElementById('log').textContent += s + '\n'; console.log(s); };
+let lastErr = ''; const logOnce = (s) => { if (s !== lastErr) { lastErr = s; log(s); } };  // for errors that recur every frame
+const $ = (id) => document.getElementById(id);
+const median = (a) => [...a].sort((x, y) => x - y)[a.length >> 1];
+const maxdiff = (a, b) => { let m = 0; for (let i = 0; i < a.length; i++) m = Math.max(m, Math.abs(a[i] - b[i])); return m; };
+function tgauss(n, seed, t) {  // truncated normal, one random stream per value: lowering t redraws only values beyond ±t
+  const out = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    let s = (Math.imul(seed, 0x9E3779B1) ^ Math.imul(i + 1, 0x85EBCA6B)) >>> 0;
+    const u = () => { s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return (((t ^ (t >>> 14)) >>> 0) + 0.5) / 4294967296; };
+    let v;
+    do { v = Math.sqrt(-2 * Math.log(u())) * Math.cos(2 * Math.PI * u()); } while (Math.abs(v) > t);
+    out[i] = v;
+  }
+  return out;
+}
+// NHWC (pixels x channels) <-> NCHW
+const toNCHW = (a, P, C) => { const o = new Float32Array(P * C); for (let p = 0; p < P; p++) for (let c = 0; c < C; c++) o[c * P + p] = a[p * C + c]; return o; };
+const toNHWC = (a, P, C) => { const o = new Float32Array(P * C); for (let p = 0; p < P; p++) for (let c = 0; c < C; c++) o[p * C + c] = a[c * P + p]; return o; };
+
+async function main() {
+  if (!navigator.gpu) { log('No WebGPU in this browser.'); $('status').textContent = 'This page needs WebGPU, which this browser does not offer. Recent desktop Chrome and Edge have it.'; return; }
+  const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+  if (!adapter) {  // the API exists but no usable GPU (e.g. a Firefox build or GPU where WebGPU is not enabled yet)
+    const msg = 'This browser has WebGPU but found no usable GPU adapter. Try a current Chrome or Edge, or check the browser\'s WebGPU support for this system.';
+    log(msg); $('status').textContent = msg; return;
+  }
+  // Firefox 159 (Windows) reports shader-f16 but an FP16 TAEF2 frame never finishes (>60 s), so Firefox gets FP32
+  // everywhere.
+  const hasF16 = adapter.features.has('shader-f16') && !/Firefox\//.test(navigator.userAgent) && typeof Float16Array === 'function';  // Float16Array: Chrome 135+
+  const Q = new URLSearchParams(location.search);
+  const profile = Q.has('profile') && adapter.features.has('timestamp-query');
+  const device = await adapter.requestDevice({ requiredFeatures: [...(profile ? ['timestamp-query'] : []), ...(hasF16 ? ['shader-f16'] : [])] });
+  // A lost GPU (crash, driver reset): nothing more can run, so a notice with a Reload button. Errors: the first few are
+  // logged and the first is shown (logging every frame's would freeze the page).
+  device.lost.then((info) => gpuLostNotice(info.message || info.reason));
+  let gpuErrors = 0;
+  device.addEventListener('uncapturederror', (e) => { if (gpuErrors++ < 3) log('WebGPU error: ' + e.error.message); if (gpuErrors === 1) $('status').textContent = 'GPU error: ' + e.error.message; });
+  log(`GPU: ${gpuLabel(adapter.info || {})}. FP16 ${hasF16 ? 'supported' : 'not supported'}.`);
+  if (!hasF16) { $('th16').checked = false; $('th16').disabled = $('gh16').disabled = true; }
+  $('gh16').checked = false; $('full').checked = false;  // Chrome restores checkbox state on reload
+  if (SMALL_DEVICE) { $('full').disabled = true; $('full').parentElement.title = 'Needs a larger device'; }  // the 200 MB FP32 decoder
+
+  // Models. Each one's files carry its prefix (see demo/convert.py).
+  const MODELS = {
+    s: { size: 'S', label: 'R3GAN2-S', info: '17 M params', wfile: 'imagenet_s_weights', pre: 'imagenet_s_' },
+    m: { size: 'M', label: 'R3GAN2-M', info: '61 M params', wfile: 'imagenet_m_weights', pre: 'imagenet_m_' },
+    l: { size: 'L', label: 'R3GAN2-L', info: '131 M params', wfile: 'imagenet_l_weights', pre: 'imagenet_l_' },
+    ffhq: { ffhq: true, label: 'R3GAN2-FFHQ', info: '27 M params', wfile: 'ffhq_weights' },
+  };
+  const OLD = { imagenet: 's', 'imagenet-m': 'm', 'imagenet-l': 'l', ffhq: 'ffhq' };  // earlier ?model= links
+
+  const get = (f) => fetch(f).then((r) => r.ok ? r : Promise.reject(new Error(`${f}: ${r.status}`)));
+  // Large downloads report progress in the status line under the image; storage as lab.js (shared with the map).
+  const status = (s) => { $('status').textContent = s; };
+  const cachedBytes = (name, what) => stored(name, status, { what, log });
+  const f32 = (f) => get(f).then((r) => r.arrayBuffer()).then((b) => new Float32Array(b));
+  const names = await get('classes.json').then((r) => r.json());
+  const Z = 64, E = 64;  // z and class-embedding sizes, the same for every released model (FFHQ has no classes)
+  for (const id of ['ca', 'cb']) $(id).innerHTML = names.map((n, i) => `<option value="${i}">${i} ${n}</option>`).join('');
+  const cname = (k) => `${names[k]} (${k})`;  // how a class reads everywhere: name first, number after
+  $('cnames').innerHTML = names.map((n, i) => `<option value="${cname(i)}"></option>`).join('');
+
+  // ---- the current model: weights, class table, test vectors, built networks ----
+  let Mdl = null;
+  async function loadModel(code) {
+    const d = MODELS[code];
+    const man = await get(data(d.wfile + '.json')).then((r) => r.json());
+    const wbin = await cachedBytes(data(d.wfile + '.bin'), `weights (${d.label}${d.ffhq ? '' : ' + TAEF2'}, FP32)`);
+    const [embed, test] = await Promise.all([d.ffhq ? null : f32(data(d.pre + 'embed.bin')), f32(data(d.ffhq ? 'ffhq_test.bin' : d.pre + 'test.bin'))]);
+    const N = man.noise_total;
+    if (man.in_dim !== Z + (d.ffhq ? 0 : E) + 1) throw new Error(`${d.label}: unexpected input size ${man.in_dim}`);
+    // test vectors: ImageNet z, c, noise, latent (NCHW), image (NCHW); FFHQ z, noise, image (NCHW)
+    let o = 0; const tv = { z: test.subarray(o, o += Z) };
+    tv.c = d.ffhq ? null : test.subarray(o, o += E); tv.n = test.subarray(o, o += N);
+    tv.l = d.ffhq ? null : test.subarray(o, o += 32768); tv.i = test.subarray(o, o += 196608);
+    return { code, ...d, man, wbin, embed, N, tv, nets: {}, tiFull: null };
+  }
+  const label = () => Mdl.ffhq ? 'FFHQ generator FP32' : `${Mdl.size} generator ${$('gh16').checked ? 'FP16' : 'FP32'}, ${$('full').checked ? 'full FLUX.2 decoder (ONNX FP32)' : `TAEF2 ${$('th16').checked ? 'FP16' : 'FP32'}`}`;
+  async function getNet() {  // one WGSL network per precision setting, built on first use
+    const half = !Mdl.ffhq && $('th16').checked, gHalf = !Mdl.ffhq && $('gh16').checked, key = `${half}${gHalf}`;
+    if (!Mdl.nets[key]) {
+      for (const k in Mdl.nets) { Mdl.nets[k].net.destroy(); delete Mdl.nets[k]; }  // one network at a time: each holds its own copy of the weights
+      const t0 = performance.now();
+      const net = await scoped(device, Mdl.label, () => createFastGAN(device, Mdl.man, Mdl.wbin, { half, gHalf }), (n) => n.destroy());
+      Mdl.nets[key] = { net, draw: net.attach($('cv')) };
+      log(`${Mdl.label}: built ${net.ops.length} dispatches in ${(performance.now() - t0).toFixed(0)} ms`);
+    }
+    return Mdl.nets[key];
+  }
+
+  // Full FLUX.2 decoder through onnxruntime-web, loaded on first use (its own WebGPU device; data goes via the CPU).
+  // All three ImageNet models share the same latent statistics, so one exported decoder serves them all.
+  let vae = null;
+  async function fullDecoder() {
+    if (!vae) {
+      await new Promise((ok, err) => { const s = document.createElement('script'); s.src = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.webgpu.min.js'; s.onload = ok; s.onerror = err; document.head.appendChild(s); });
+      ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/';
+      const t0 = performance.now();
+      const bytes = new Uint8Array(await cachedBytes(data('vae_dec.onnx'), 'full FLUX.2 decoder (FP32)'));
+      status('Loading the full FLUX.2 decoder…');
+      vae = await ort.InferenceSession.create(bytes, { executionProviders: ['webgpu'] });
+      status('');
+      log(`loaded vae_dec.onnx in ${(performance.now() - t0).toFixed(0)} ms`);
+    }
+    return vae;
+  }
+
+  // One frame: returns when the image is on the canvas. With the full decoder: G on WGSL, decode on ORT.
+  // show = false: compute into the image buffer without drawing it (check, benchmark), so the canvas keeps its image.
+  async function render(z, c, n, wait = true, show = true) {
+    const { net, draw } = await getNet();
+    net.setInputs(z, c, n);
+    if (Mdl.ffhq || !$('full').checked) {
+      const enc = net.run(); if (show) draw(enc); device.queue.submit([enc.finish()]);
+      if (wait) await device.queue.onSubmittedWorkDone();
+      return net;
+    }
+    device.queue.submit([net.run(net.nG).finish()]);
+    const lat = toNCHW(await net.read(net.lat, 32768), 1024, 32);
+    const { image } = await (await fullDecoder()).run({ latent: new ort.Tensor('float32', lat, [1, 32, 32, 32]) });
+    device.queue.writeBuffer(net.img, 0, toNHWC(image.data, 65536, 3));
+    const enc = device.createCommandEncoder(); if (show) draw(enc); device.queue.submit([enc.finish()]);
+    await device.queue.onSubmittedWorkDone();
+    return net;
+  }
+
+  async function check() {
+    const tv = Mdl.tv, full = !Mdl.ffhq && $('full').checked, net = await render(tv.z, tv.c, tv.n, true, false);
+    const img = toNCHW(await net.read(net.img, 196608), 65536, 3);
+    if (Mdl.ffhq) { log(`[${label()}] check vs PyTorch: image max|diff| ${maxdiff(img, tv.i).toExponential(2)}`); return; }
+    const lat = toNCHW(await net.read(net.lat, 32768), 1024, 32);
+    if (full && !Mdl.tiFull) Mdl.tiFull = await f32(data(Mdl.pre + 'test_full.bin'));
+    log(`[${label()}] check vs PyTorch: latent max|diff| ${maxdiff(lat, tv.l).toExponential(2)}, image max|diff| ${maxdiff(img, full ? Mdl.tiFull : tv.i).toExponential(2)}`);
+  }
+
+  async function bench() {
+    const tv = Mdl.tv, ts = [], runs = !Mdl.ffhq && $('full').checked ? 5 : 20;
+    for (let i = 0; i < runs + 3; i++) { const t = performance.now(); await render(tv.z, tv.c, tv.n, true, false); if (i >= 3) ts.push(performance.now() - t); }
+    log(`[${label()}] median of ${runs}, batch 1: ${median(ts).toFixed(1)} ms per frame on screen (${(1000 / median(ts)).toFixed(1)} fps)`);
+    if (profile && (Mdl.ffhq || !$('full').checked)) {
+      const { net } = await getNet(), n = net.ops.length, qs = device.createQuerySet({ type: 'timestamp', count: 2 * n });
+      const rb = device.createBuffer({ size: 16 * n, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC });
+      const sum = {};
+      for (let rep = 0; rep < 5; rep++) {
+        const enc = net.run(n, qs); enc.resolveQuerySet(qs, 0, 2 * n, rb, 0); device.queue.submit([enc.finish()]);
+        const t = new BigInt64Array((await net.read(rb, 4 * n)).buffer);
+        net.ops.forEach((op, k) => sum[op.kind] = (sum[op.kind] || 0) + Number(t[2 * k + 1] - t[2 * k]) / 1e6 / 5);
+      }
+      log('GPU time per frame by kernel (ms):\n' + Object.entries(sum).sort((a, b) => b[1] - a[1]).map(([k, v]) => `  ${v.toFixed(2).padStart(7)}  ${k}`).join('\n'));
+    }
+  }
+
+  // Speed report: images per second for every model at the default settings, frames queued back to back as on
+  // the live page, as one line to paste back. Restores the model and precision settings afterwards.
+  async function throughput() {  // images/s over >= 2 s, queued in batches of ~0.25 s so the GPU is rarely idle
+    const tv = Mdl.tv, frame = () => render(tv.z, tv.c, tv.n, false, false);
+    let t = performance.now();
+    for (let i = 0; i < 3; i++) await render(tv.z, tv.c, tv.n, true, false);  // warm up, and estimate the frame time
+    const batch = Math.max(2, Math.round(250 * 3 / (performance.now() - t)));
+    let n = 0; t = performance.now();
+    while (performance.now() - t < 2000) {
+      for (let i = 0; i < batch; i++) await frame();
+      await device.queue.onSubmittedWorkDone(); n += batch;
+    }
+    return n * 1000 / (performance.now() - t);
+  }
+  async function speedReport() {
+    // Ask before downloading: OK fetches the missing models, Cancel times only the ones already here.
+    const all = ['s', 'm', 'l', 'ffhq'], have = await savedModels(); have.add(Mdl.code);
+    const need = all.filter((c) => !have.has(c)), nm = (c) => MODELS[c].size || 'FFHQ';
+    let todo = all;
+    if (need.length && !confirm(`The speed report times all four models. ${need.map((c) => `${nm(c)} (${SIZES[c]})`).join(', ')} ${need.length > 1 ? 'aren\'t' : 'isn\'t'} saved in this browser yet.\n\n`
+      + `OK: download ${need.reduce((a, c) => a + parseInt(SIZES[c]), 0)} MB and time all four.\nCancel: time only the models already saved.`)) todo = all.filter((c) => have.has(c));
+    const was = Mdl.code, ids = ['th16', 'gh16', 'full'], keep = ids.map((id) => $(id).checked);
+    $('th16').checked = hasF16; $('gh16').checked = false; $('full').checked = false;
+    const out = [], out16 = [];  // FP32 and FP16 generator; FFHQ has no FP16 path
+    for (const code of all) {
+      const name = nm(code);
+      if (!todo.includes(code)) { out.push(`${name} not timed`); continue; }
+      if (Mdl.code !== code) await switchModel(code);
+      if (Mdl.code !== code) { out.push(`${name} failed`); continue; }
+      // Three rounds, alternating the order so slow drift (GPU clocks, heat) affects both precisions alike; report the median.
+      const modes = Mdl.ffhq || !hasF16 ? [false] : [false, true], got = { false: [], true: [] };
+      await exclusive(async () => {
+        for (let r = 0; r < 3; r++) for (const half of r % 2 ? [...modes].reverse() : modes) {
+          $('gh16').checked = half; status(`Timing ${MODELS[code].label}, ${half ? 'FP16' : 'FP32'}, round ${r + 1} of 3…`);
+          got[half].push(await throughput());
+        }
+        status('');
+      });
+      for (const half of modes) {
+        log(`${MODELS[code].label} ${half ? 'FP16' : 'FP32'}: ${got[half].map((v) => v.toFixed(1)).join(', ')} images/s`);
+        (half ? out16 : out).push(`${name} ${median(got[half]).toFixed(1)}`);
+      }
+    }
+    ids.forEach((id, k) => $(id).checked = keep[k]);
+    if (Mdl.code !== was) await switchModel(was);
+    const i = adapter.info || {}, ua = navigator.userAgent.match(/(Edg|Firefox|Chrome|Version)\/(\d+)/);
+    const browser = ua ? `${{ Edg: 'Edge', Version: 'Safari' }[ua[1]] || ua[1]} ${ua[2]}` : navigator.userAgent;
+    const line = `R3GAN2 images/s, FP32 generator: ${out.join(', ')}${out16.length ? ` | FP16 generator: ${out16.join(', ')}` : ''} | GPU ${[i.vendor, i.architecture, i.description].filter(Boolean).join(' ')} | ${browser}, ${navigator.userAgentData?.platform || navigator.platform} | TAEF2 ${hasF16 ? 'FP16' : 'FP32'}`;
+    log(line);
+    try { await navigator.clipboard.writeText(line); $('shared').textContent = 'Speed report copied'; }
+    catch (e) { $('shared').textContent = 'Copy the speed report from the Developer log'; }
+    setTimeout(() => { $('shared').textContent = ''; }, 4000);
+  }
+
+  // ---- generator inputs: z (walk state), noise, classes; all independent of the model ----
+  // The image uses these applied values; the sliders' thumbs are targets they move towards (see the sliders section).
+  const applied = { t: 0, psi: 1, tz: 4, tn: 4 };
+  const thr = (id) => (applied[id] >= 4 ? Infinity : applied[id]);  // slider at its right end = off
+  let seed = 1, noiseSeed = 7, noise, theta = 0, dirty = true, busy = true, explicit = false;
+  // Walk state on the sphere of radius Rz: e0, e1 orthonormal (loop plane), cur = current point, vel = unit tangent.
+  // `explicit`: cur can no longer be rebuilt from (seed, theta), e.g. after wandering, so the URL carries cur itself.
+  let Rz = 1, e0, e1, cur, vel;
+  const dot = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * b[i]; return s; };
+  const unit = (a) => { const n = Math.sqrt(dot(a, a)); for (let i = 0; i < a.length; i++) a[i] /= n; return a; };
+  function setPoint(p) {  // start the walk at point p; the loop plane uses the seed's second sample
+    const z1 = tgauss(Z, seed + 1000, thr('tz'));
+    Rz = Math.sqrt(dot(p, p)); e0 = unit(Float32Array.from(p));
+    const d = dot(z1, e0); e1 = unit(z1.map((v, i) => v - d * e0[i]));
+    cur = Float32Array.from(p); vel = Float32Array.from(e1); theta = 0;
+  }
+  const drawZ = () => { setPoint(tgauss(Z, seed, thr('tz'))); explicit = false; };
+  // Class tour: as Wander, and the class blends into a new random one every 1.2 / speed seconds (4 s at the default).
+  // The clothing classes the map leaves out are left out here too.
+  const TOUR_SKIP = new Set(['bikini', 'brassiere', 'maillot', 'maillot tank suit', 'miniskirt', 'swimming trunks', 'diaper']);
+  const tourPick = () => { let k; do k = Math.floor(Math.random() * names.length); while (TOUR_SKIP.has(names[k])); return k; };
+  function walkStep(dt) {  // advance the walk by dt seconds
+    const phi = +$('speed').value * dt;
+    if ($('walkmode').value === 'tour' && !Mdl.ffhq) {
+      let t = applied.t + dt * Math.max(0.05, +$('speed').value) / 1.2;
+      if (t >= 1) { $('ca').value = $('cb').value; $('cb').value = tourPick(); t = Math.min(t - 1, 0.99); }
+      applied.t = t; $('t').value = t; eases.delete('t'); syncClassText();
+    }
+    if ($('walkmode').value === 'loop') {
+      theta += phi;
+      for (let i = 0; i < Z; i++) cur[i] = Rz * (Math.cos(theta) * e0[i] + Math.sin(theta) * e1[i]);
+      return;
+    }
+    // wander: turn the direction a little at random, keep it tangent, then move along it. The kick is spread over Z - 1
+    // tangent dimensions, so it is scaled by 1/sqrt(Z - 1) to give a total turn of KAPPA rad per sqrt(second):
+    // ~2 degrees per frame at 60 fps, and the heading stays recognisable for ~1/KAPPA^2 = 10 s.
+    explicit = true;
+    const KAPPA = 0.3, u = ubuf, k = KAPPA * Math.sqrt(dt / (Z - 1));
+    for (let i = 0; i < Z; i++) u[i] = cur[i] / Rz;
+    for (let i = 0; i < Z; i++) vel[i] += k * Math.sqrt(-2 * Math.log(Math.random())) * Math.cos(2 * Math.PI * Math.random());
+    const d = dot(vel, u); for (let i = 0; i < Z; i++) vel[i] -= d * u[i]; unit(vel);
+    const c = Math.cos(phi), s = Math.sin(phi);
+    for (let i = 0; i < Z; i++) { const ui = u[i], vi = vel[i]; cur[i] = Rz * (c * ui + s * vi); vel[i] = c * vi - s * ui; }
+  }
+  let noiseGen = 0;  // changes with every new noise array (seed, truncation or model)
+  let refineDead = false;  // the full FLUX.2 decoder failed to start here (see refineFailed)
+  const drawNoise = () => { noise = tgauss(Mdl.N, noiseSeed, thr('tn')); noiseGen++; };
+  // Per-frame inputs reuse these arrays (no garbage per frame); setInputs copies them to the GPU straight away.
+  const zbuf = new Float32Array(Z), cbuf = new Float32Array(E), ubuf = new Float32Array(Z);
+  const zNow = () => { const psi = applied.psi, z = zbuf; for (let i = 0; i < Z; i++) z[i] = psi * cur[i]; return z; };
+  function classVec() {
+    if (Mdl.ffhq) return null;
+    const cls = (k) => Mdl.embed.subarray(k * E, (k + 1) * E);
+    const a = cls(+$('ca').value), b = cls(+$('cb').value), t = applied.t, c = cbuf;
+    let s = 0; for (let i = 0; i < E; i++) { c[i] = (1 - t) * a[i] + t * b[i]; s += c[i] * c[i]; }
+    const k = Math.sqrt(E / s); for (let i = 0; i < E; i++) c[i] *= k;
+    return c;
+  }
+
+  // ---- shareable URL: every generator input, compactly (seeds where possible, else z as 64 FP16 values) ----
+  const b64u = (u8) => btoa(String.fromCharCode(...u8)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const unb64u = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), (ch) => ch.charCodeAt(0));
+  const framed = window.top !== window, hist = framed ? top.history : history;  // inside the project page (index.html)
+  // There, the page's address follows the generator only once the reader has used it (not on every visit).
+  let used = !framed;
+  for (const ev of ['pointerdown', 'keydown', 'input']) addEventListener(ev, () => { used = true; }, { capture: true, passive: true });
+  function stateURL() {
+    const q = new URLSearchParams({ m: Mdl.code, s: seed });
+    if (explicit && typeof Float16Array === 'function') q.set('z', b64u(new Uint8Array(Float16Array.from(cur).buffer)));  // no Float16Array (Chrome < 135): no z in the link
+    else if (theta) q.set('th', (theta % (2 * Math.PI)).toFixed(4));
+    q.set('n', noiseSeed);
+    if (+$('tz').value < 4) q.set('tz', $('tz').value);  // links carry the targets
+    if (+$('tn').value < 4) q.set('tn', $('tn').value);
+    if (+$('psi').value !== 1) q.set('p', $('psi').value);
+    if (!Mdl.ffhq) { q.set('a', $('ca').value); q.set('b', $('cb').value); if (+$('t').value) q.set('t', $('t').value); }
+    const page = framed ? top.location : location;
+    return `${page.origin}${page.pathname}?${q}${framed ? '#demo' : ''}`;
+  }
+  const randSeed = () => 1 + Math.floor(Math.random() * 999999);  // six digits at most: fits the seed boxes
+  function applyURL() {  // inputs from the URL; anything missing keeps its default
+    const num = (k, d) => (Q.has(k) && Number.isFinite(+Q.get(k)) ? +Q.get(k) : d);
+    seed = num('s', randSeed()); noiseSeed = num('n', randSeed());  // no seeds in the link: open on a random sample
+    $('tz').value = num('tz', 4); $('tn').value = num('tn', 4); $('psi').value = num('p', 1);
+    $('ca').value = num('a', 207); $('cb').value = num('b', 281); $('t').value = num('t', 0);
+    for (const k in applied) applied[k] = +$(k).value;  // a link opens on its values, without easing
+    drawZ();
+    if (Q.has('z')) {
+      try { const z = new Float32Array(new Float16Array(unb64u(Q.get('z')).buffer)); if (z.length === Z) { setPoint(z); explicit = true; } } catch (e) { log('ignored a malformed z in the URL'); }
+    } else if (Q.has('th')) { theta = num('th', 0); for (let i = 0; i < Z; i++) cur[i] = Rz * (Math.cos(theta) * e0[i] + Math.sin(theta) * e1[i]); }
+  }
+  const showT = (id) => { const v = +$(id).value; $(id + 'v').textContent = v >= 4 ? 'off' : v.toFixed(2); };  // the target
+  const showAll = () => { showT('tz'); showT('tn'); $('psiv').textContent = +$('psi').value === 1 ? '1 (as trained)' : (+$('psi').value).toFixed(2); $('speedv').textContent = (+$('speed').value).toFixed(2); };
+
+  // ---- switching models keeps every input; the old image stays on screen until the new model draws ----
+  const showModel = (m) => {  // the panel for model m
+    setModelUI(m.code);
+    $('modelmeta').textContent = `${m.label}, ${m.info}. ${m.ffhq ? 'Pixel space.' : 'FLUX.2 AE space.'}`;
+    $('classrow').style.visibility = m.ffhq ? 'hidden' : 'visible';  // FFHQ has no classes; the space stays so the panel does not jump
+    {  // nor a class tour: its button is greyed out, and a tour under way becomes a wander
+      const tb = document.querySelector('.wbtn[data-w="tour"]'); tb.disabled = !!m.ffhq; tb.title = m.ffhq ? 'Faces have no classes to tour' : '';
+      if (m.ffhq && $('walkmode').value === 'tour') { $('walkmode').value = 'wander'; document.querySelectorAll('.wbtn').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.w === 'wander'))); }
+    }
+    $('inopts').hidden = !!m.ffhq; $('decseg').style.visibility = m.ffhq || refineDead ? 'hidden' : 'visible';  // FFHQ: no precision options, no FLUX.2 decoder
+  };
+  async function switchModel(code) {
+    busy = true; while (inflight) await new Promise((r) => setTimeout(r, 5));
+    const prev = Mdl;
+    try {
+      const m = await loadModel(code);
+      if (prev) for (const k in prev.nets) prev.nets[k].net.destroy();  // free the old model's GPU memory
+      Mdl = m; showModel(m);
+      drawNoise();
+      status('Preparing the model…'); await getNet();
+      // Browsers may compile shaders on first use (Firefox: ~20 s), so finish one frame off screen before clearing the message.
+      status('Compiling shaders…'); await render(zNow(), classVec(), noise, true, false); status('');
+      markSaved();
+    } catch (e) {
+      log('Couldn’t load the model: ' + e); status(`Couldn’t load the model: ${e.message || e}`);
+      if (prev && Mdl !== prev) {  // go back to the model that worked; its networks are rebuilt from its weights on demand
+        for (const k in Mdl.nets) Mdl.nets[k].net.destroy();
+        Mdl = prev; showModel(prev); drawNoise();
+      } else if (prev) setModelUI(prev.code);
+    }
+    busy = false; dirty = true;
+  }
+
+  // ---- controls ----
+  const exclusive = async (fn) => { busy = true; while (inflight) await new Promise((r) => setTimeout(r, 5)); try { await fn(); } catch (e) { log('ERROR: ' + e); } busy = false; dirty = true; };
+  // ---- redesigned controls ----
+  // Model buttons show the download size, or "saved" once the weights are in this browser's storage (any version).
+  const SIZES = { s: '75\u00a0MB', m: '249\u00a0MB', l: '528\u00a0MB', ffhq: '107\u00a0MB' };
+  async function savedModels() {  // codes of the models whose weights are in this browser's storage
+    let urls = [];
+    const codes = Object.keys(MODELS), have = await Promise.all(codes.map((c) => savedInBrowser(data(MODELS[c].wfile + '.bin'))));
+    return new Set(codes.filter((c, i) => have[i]));
+  }
+  async function markSaved() {
+    const have = await savedModels();
+    document.querySelectorAll('.mbtn').forEach((b) => {
+      const saved = have.has(b.dataset.m), big = SMALL_DEVICE && (b.dataset.m === 'm' || b.dataset.m === 'l');  // too much memory for a phone or tablet
+      b.disabled = big;
+      document.querySelector(`.segsub [data-m="${b.dataset.m}"]`).textContent = big ? 'needs a larger device' : saved ? 'cached weights' : `${SIZES[b.dataset.m]} download`;
+      b.title = `${{ s: 'ImageNet, small', m: 'ImageNet, medium', l: 'ImageNet, large', ffhq: 'Faces' }[b.dataset.m]}${saved ? ', cached weights' : `, ${SIZES[b.dataset.m]} download`}`;
+    });
+  }
+  const setModelUI = (code) => {
+    document.querySelectorAll('.mbtn').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.m === code)));
+    $('topnote').style.visibility = MODELS[code].ffhq ? 'hidden' : 'visible';  // the note is about ImageNet; its line stays so nothing jumps
+  };
+  const setWalkUI = () => document.querySelectorAll('.wbtn').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.w === $('walkmode').value)));
+  const syncClassText = () => {
+    if (document.activeElement !== $('csearch')) $('csearch').value = cname(+$('ca').value);
+    if (document.activeElement !== $('cbsearch')) $('cbsearch').value = cname(+$('cb').value);
+    $('tv').textContent = (+$('t').value).toFixed(2);
+  };
+  const parseClass = (v) => {  // "name (number)", a bare number, or a name
+    v = v.trim(); const m = v.match(/\((\d+)\)\s*$/) || v.match(/^(\d+)$/);
+    const k = m ? +m[1] : names.findIndex((n) => n.toLowerCase() === v.toLowerCase());
+    return k >= 0 && k < names.length ? k : -1;
+  };
+  const setSeed = (s) => { seed = Math.max(0, Math.floor(s)); drawZ(); dirty = true; markGrid(); };
+  $('t').oninput = () => { syncClassText(); ease('t'); };
+  for (const [box, sel] of [['csearch', 'ca'], ['cbsearch', 'cb']]) {
+    $(box).onchange = () => { const k = parseClass($(box).value); if (k >= 0) { $(sel).value = k; dirty = true; } $(box).blur(); syncClassText(); };
+    $(box).onfocus = () => $(box).select();
+  }
+  document.querySelectorAll('.wbtn').forEach((b) => b.onclick = () => { $('walkmode').value = b.dataset.w; setWalkUI(); dirty = true; });
+  const toggleWalk = () => { $('walk').checked = !$('walk').checked; $('dial').classList.toggle('on', $('walk').checked); $('dialicon').setAttribute('d', $('walk').checked ? 'M-4,-5 h3 v10 h-3 Z M1,-5 h3 v10 h-3 Z' : 'M-3.5,-5 L5,0 L-3.5,5 Z'); };
+  $('dial').onclick = toggleWalk;
+  $('prev').onclick = () => setSeed(seed - 1);
+  $('next').onclick = () => setSeed(seed + 1);
+  $('zseed').onchange = () => setSeed(+$('zseed').value || 0);
+  const setNoiseSeed = (s) => { noiseSeed = Math.max(0, Math.floor(s)); drawNoise(); dirty = true; };
+  $('nseed').onchange = () => setNoiseSeed(+$('nseed').value || 0);
+  $('nprev').onclick = () => setNoiseSeed(noiseSeed - 1);
+  $('nnext').onclick = () => setNoiseSeed(noiseSeed + 1);
+  document.addEventListener('keydown', (e) => {  // the keys listed under the seeds; not while typing
+    if (e.target.closest('input, select, textarea') || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key === ' ') { e.preventDefault(); toggleWalk(); }
+    else if (e.key === 'z' || e.key === 'Z') $('newz').click();
+    else if (e.key === 'n' || e.key === 'N') $('newn').click();
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      const step = e.key === 'ArrowLeft' ? -1 : 1;
+      if (e.shiftKey) setNoiseSeed(noiseSeed + step); else setSeed(seed + step);
+    }
+  });
+  $('save').onclick = () => { if (!busy) exclusive(async () => {  // save the image on screen (exact pixels) as a PNG
+    let c = $('hq');  // the full FLUX.2 decoder image, when that is the one showing
+    if (!$('hq').classList.contains('on')) {
+      const net = await render(zNow(), classVec(), noise, true, false), px = await net.read(net.img, 196608);
+      c = document.createElement('canvas'); c.width = c.height = 256; const x = c.getContext('2d'), im = x.createImageData(256, 256);
+      for (let i = 0; i < 65536; i++) { im.data[4 * i] = px[3 * i] * 255; im.data[4 * i + 1] = px[3 * i + 1] * 255; im.data[4 * i + 2] = px[3 * i + 2] * 255; im.data[4 * i + 3] = 255; }
+      x.putImageData(im, 0, 0);
+    }
+    const a = document.createElement('a'); a.download = `r3gan2-${Mdl.code}${Mdl.ffhq ? '' : '-c' + $('ca').value}-z${seed}-n${noiseSeed}${c.id === 'hq' ? '-flux2' : ''}.png`;
+    a.href = URL.createObjectURL(await new Promise((r) => c.toBlob(r))); a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }); };
+  // Walk dial: the current point's angle in the loop plane (e0, e1); in wander mode a short trail of recent angles.
+  const trail = [];
+  // Attributes are set only when they change, so an idle page does no SVG work per frame.
+  const setAttr = (el, k, v) => { if (el.getAttribute(k) !== v) el.setAttribute(k, v); };
+  function drawDial() {
+    const a = Math.atan2(dot(cur, e1), dot(cur, e0)), r = 15 * Math.min(1, Math.hypot(dot(cur, e0), dot(cur, e1)) / Rz);
+    setAttr($('dialdot'), 'cx', (r * Math.cos(a)).toFixed(2)); setAttr($('dialdot'), 'cy', (-r * Math.sin(a)).toFixed(2));
+    if ($('walkmode').value !== 'loop' && $('walk').checked) {  // wander and class tour: the trail
+      trail.push(`${(r * Math.cos(a)).toFixed(1)},${(-r * Math.sin(a)).toFixed(1)}`); if (trail.length > 90) trail.shift();
+      setAttr($('dialtrail'), 'points', trail.join(' '));
+    } else if (trail.length) { trail.length = 0; setAttr($('dialtrail'), 'points', ''); }
+  }
+  $('psi').oninput = () => { showAll(); ease('psi'); };
+  $('newz').onclick = () => setSeed(randSeed());
+  $('newn').onclick = () => setNoiseSeed(randSeed());
+  // Changing t_z keeps the walk where it is. Loop: re-truncate the loop's two samples and keep the angle. A point with
+  // no seed path (after wandering, or from a link): redraw only its values beyond ±t_z, then carry on in the same direction.
+  $('tz').oninput = () => { showT('tz'); ease('tz'); };
+  function applyTz() {
+    if (!explicit) {
+      const th = theta; drawZ(); theta = th;
+      for (let i = 0; i < Z; i++) cur[i] = Rz * (Math.cos(theta) * e0[i] + Math.sin(theta) * e1[i]);
+    } else {
+      const t = thr('tz'), ref = tgauss(Z, seed, t), v = Float32Array.from(vel);
+      setPoint(cur.map((x, i) => (Math.abs(x) > t ? ref[i] : x)));
+      const u = cur.map((x) => x / Rz), d = dot(v, u); for (let i = 0; i < Z; i++) vel[i] = v[i] - d * u[i]; unit(vel);
+    }
+  }
+  $('tn').oninput = () => { showT('tn'); ease('tn'); };
+  $('speed').oninput = () => showAll();
+  ['th16', 'gh16', 'full'].forEach((id) => $(id).onchange = () => { dirty = true; });
+  $('check').onclick = () => { if (!busy) exclusive(check); };
+  $('bench').onclick = () => { if (!busy) exclusive(bench); };
+  $('report').onclick = async () => { if (busy) return; $('report').disabled = true; try { await speedReport(); } catch (e) { log('ERROR: ' + e); } $('report').disabled = false; };
+  let gatePick = null;  // set while the page waits for a first click to download (see the start below)
+  document.querySelectorAll('.mbtn').forEach((b) => b.onclick = () => { if (gatePick) gatePick(b.dataset.m); else if (!busy && Mdl && b.dataset.m !== Mdl.code) switchModel(b.dataset.m); });
+  // Paper figure classes: set class A (blend 0), keep z and noise.
+  document.querySelectorAll('.pc').forEach((b) => b.onclick = () => { $('ca').value = b.dataset.c; $('t').value = 0; applied.t = 0; eases.delete('t'); drawGhosts(); syncClassText(); dirty = true; });
+  // Sample grid: 16 consecutive z seeds for the current class, noise and sliders, rendered off screen and read back.
+  let gridStart = null;
+  const markGrid = () => document.querySelectorAll('#gridcells canvas').forEach((c) => c.classList.toggle('cur', +c.dataset.seed === seed));
+  async function showGrid(start) {
+    gridStart = start;
+    await exclusive(async () => {
+      const box = $('gridcells');  // cells are reused, so a second grid replaces the images without moving the page
+      $('gridinfo').textContent = `${Mdl.ffhq ? 'Faces' : cname(+$('ca').value)}, z seeds ${start} to ${start + 15}. Click an image to load it.`;
+      const full = document.createElement('canvas'); full.width = full.height = 256;
+      const fctx = full.getContext('2d'), im = fctx.createImageData(256, 256), c = classVec(), psi = applied.psi;
+      for (let k = 0; k < 16; k++) {
+        const sd = start + k, z = tgauss(Z, sd, thr('tz')).map((v) => psi * v);
+        status(`Making sample ${k + 1} of 16…`);
+        const net = await render(z, c, noise, true, false), px = await net.read(net.img, 196608);
+        for (let i = 0; i < 65536; i++) { im.data[4 * i] = px[3 * i] * 255; im.data[4 * i + 1] = px[3 * i + 1] * 255; im.data[4 * i + 2] = px[3 * i + 2] * 255; im.data[4 * i + 3] = 255; }
+        fctx.putImageData(im, 0, 0);
+        let cell = box.children[k];
+        if (!cell) { cell = box.appendChild(document.createElement('canvas')); cell.width = cell.height = 192; }
+        cell.title = `z seed ${sd}`; cell.dataset.seed = sd; cell.classList.toggle('cur', sd === seed);
+        cell.getContext('2d').drawImage(full, 0, 0, 192, 192);
+        cell.onclick = () => setSeed(sd);
+      }
+      status(''); markGrid();
+    });
+  }
+  $('grid').onclick = () => { if (!busy) showGrid(seed); };
+  $('gridnext').onclick = () => { if (!busy) showGrid(gridStart === null ? seed : gridStart + 16); };
+  $('share').onclick = async () => {
+    const url = stateURL(); hist.replaceState(null, '', url);
+    try { await navigator.clipboard.writeText(url); $('shared').textContent = 'Link copied'; }
+    catch (e) { $('shared').textContent = 'Couldn\'t copy the link. You can copy it from the address bar.'; }
+    setTimeout(() => { $('shared').textContent = ''; }, 2500);
+  };
+
+  // ---- start: inputs from the URL, then the model ----
+  let code = MODELS[Q.get('m')] ? Q.get('m') : OLD[Q.get('model')] || 's';
+  if (SMALL_DEVICE && (code === 'm' || code === 'l')) code = 's';  // M and L need a larger device
+  setModelUI(code);
+  $('walkmode').value = 'loop';  // defaults stay on the shell where z's training samples lie
+  $('speed').value = code === 'ffhq' ? 0.15 : code === 'l' ? 0.2 : 0.3;  // FFHQ and L render slower here
+  applyURL(); showAll(); setWalkUI(); syncClassText();
+  let lagMs = 0, capN = 2, inflight = 0, done = 0, tFps = performance.now(), tWalk = performance.now(), tUrl = 0, urlDirty = false;
+  $('refine').checked = true;  // browsers restore tick boxes on reload
+  // A model not yet in this browser's storage downloads only on a click, with its size on the button; a saved one
+  // loads at once. The model buttons pick which one the button loads.
+  let first = code;
+  markSaved();
+  const have = await savedModels(), decoderCached = await savedInBrowser(data('vae_dec.onnx'));
+  // The full decoder for still images: fetched and used as it is needed, except on phones and tablets (never there).
+  const decoderOK = !SMALL_DEVICE;
+  const DECODER_MB = 199;  // vae_dec.onnx, fetched once the first image is still (ImageNet models; FFHQ has none)
+  const totalMB = (c) => parseInt(SIZES[c]) + (MODELS[c].ffhq || decoderCached || SMALL_DEVICE ? 0 : DECODER_MB);
+  if (!have.has(code)) first = await new Promise((go) => {
+    const b = document.createElement('button'), load = (c) => { gatePick = null; b.remove(); go(c); };
+    const show = (c) => { first = c; setModelUI(c); b.innerHTML = `Load demo<small>${totalMB(c)}\u00a0MB download</small>`; };  // the model is picked beside it
+    b.id = 'loadgate'; b.type = 'button'; show(code); $('cv').parentElement.append(b);
+    gatePick = (c) => (have.has(c) ? load(c) : show(c));  // a saved model needs no asking
+    b.onclick = () => load(first);
+  });
+  await switchModel(first);
+  if (!Mdl) return;
+
+  // ---- Full FLUX.2 decoder for still images ----
+  // Once nothing has changed for 0.4 s, the current latent goes to a Web Worker running the full FLUX.2 decoder
+  // (onnxruntime-web on its own WebGPU device), and its image fades in over the live TAEF2 one. Any change hides it at
+  // once, and a result for an image no longer shown is dropped. The page's thread never waits on the decoder (longest
+  // pause measured: 7 ms). The GPU is shared, though: on an AMD 880M a decode takes ~0.9 s (the first ~5 s, compiling)
+  // and slows live frames ~7x while it runs, so a change made mid-decode can appear up to ~1 s late there.
+  // curSig: the inputs of the image on screen; hqSig: the inputs of the full-decoder image shown over it (or null);
+  // reqSig: the inputs being decoded or queued.
+  let rw = null, rwBusy = false, rwNext = null, reqSig = null, hqSig = null, curSig = null, tSubmit = 0;
+  // No decode starts while a mouse button or finger is down: a decode cannot be stopped once on the GPU, so one started
+  // during a pause mid-drag would hold up the frames when the drag goes on.
+  let ptrDown = false;
+  addEventListener('pointerdown', () => { ptrDown = true; }, true);
+  for (const ev of ['pointerup', 'pointercancel', 'blur']) addEventListener(ev, () => { ptrDown = false; }, true);
+  const sigNow = () => [Mdl.code, $('gh16').checked, noiseGen, $('ca').value, $('cb').value, applied.t, Array.from(zNow(), (v) => v.toFixed(5)).join()].join('|');
+  // Decoding runs for every ImageNet image once it is still, whatever the tick box says, so the box can switch at once.
+  const refineOn = () => decoderOK && !refineDead && Mdl && !Mdl.ffhq && !$('full').checked;
+  const hideHQ = () => { $('hq').classList.remove('on'); hqSig = null; };
+  function refineFailed(err) {  // e.g. no WebGPU in workers: keep TAEF2, drop the option, note it in the Developer log
+    log('Full FLUX.2 decoder unavailable: ' + err);
+    if (rw) rw.terminate(); rw = null; rwBusy = false; rwNext = null; reqSig = null; refineDead = true; hideHQ(); $('decseg').style.visibility = 'hidden';
+  }
+  function refineWorker() {
+    if (rw) return;
+    rw = new Worker(new URL('./refine-worker.js', import.meta.url), { type: 'module' });
+    rw.onmessage = (e) => onRefined(e.data);
+    rw.onerror = (e) => refineFailed(e.message || 'the worker failed to start');
+    rwBusy = true;
+    const abs = (f) => new URL(f, location.href).href;
+    rw.postMessage({ load: { url: abs(data('vae_dec.onnx')) } });
+  }
+  function sendRefine(req) {
+    if (rwBusy) { rwNext = req; return; }
+    rwBusy = true;
+    rw.postMessage(req, [req.lat.buffer]);
+  }
+  function onRefined(m) {
+    if (m.error) return refineFailed(m.error);
+    if (m.progress) return;  // loading happens out of sight
+    if (m.ready) log('Full FLUX.2 decoder ready');
+    rwBusy = false;
+    if (m.img && m.sig === curSig && refineOn()) {
+      const x = $('hq').getContext('2d'), im = x.createImageData(256, 256), d = im.data, P = 65536;
+      for (let i = 0; i < P; i++) { d[4 * i] = m.img[i] * 255; d[4 * i + 1] = m.img[P + i] * 255; d[4 * i + 2] = m.img[2 * P + i] * 255; d[4 * i + 3] = 255; }
+      x.putImageData(im, 0, 0); hqSig = m.sig;
+      $('hq').classList.toggle('on', $('refine').checked);
+    }
+    if (m.sig === reqSig) reqSig = null;
+    if (rwNext) { const n = rwNext; rwNext = null; sendRefine(n); }
+  }
+  async function startRefine(sig) {  // called only with no frame in flight, so the latent buffer holds this image's
+    reqSig = sig; refineWorker();
+    const { net } = await getNet(), lat = toNCHW(await net.read(net.lat, 32768), 1024, 32);
+    if (sig !== curSig || !rw) { if (reqSig === sig) reqSig = null; return; }
+    sendRefine({ lat, sig });
+  }
+  $('refine').onchange = () => {  // switch between the two frames at once, if a full-decoder frame for this image exists
+    const hq = $('hq'); hq.classList.add('now'); hq.classList.toggle('on', $('refine').checked && hqSig !== null && hqSig === curSig);
+    requestAnimationFrame(() => requestAnimationFrame(() => hq.classList.remove('now')));
+  };
+  const setDecUI = () => document.querySelectorAll('.dbtn').forEach((b) => b.setAttribute('aria-pressed', String((b.dataset.d === 'flux2') === $('refine').checked)));
+  document.querySelectorAll('.dbtn').forEach((b) => b.onclick = () => { $('refine').checked = b.dataset.d === 'flux2'; $('refine').dispatchEvent(new Event('change')); setDecUI(); syncDec(); });
+  setDecUI();
+  // The switch follows what is on screen: watch the full-decoder layer's class rather than every place that changes it.
+  const syncDec = () => $('decseg').classList.toggle('live', $('refine').checked && !$('hq').classList.contains('on'));
+  new MutationObserver(syncDec).observe($('hq'), { attributes: true, attributeFilter: ['class'] }); syncDec();
+
+  // ---- Sliders: the thumb is the target, the image follows ----
+  // Moving a slider only sets its target, so the thumb always responds at once. Each rendered frame then moves the
+  // applied value a step along a straight line from where it was to the target, landing on it exactly after
+  // EASE_FRAMES frames; a new movement restarts the line from the current applied value, so nothing queues up. A ghost
+  // dot on the track shows the applied value while it catches up.
+  const EASE_FRAMES = 4, eases = new Map();  // slider id -> { from, k }
+  const ease = (id) => { eases.set(id, { from: applied[id], k: 0 }); };
+  const APPLY = { t: () => {}, psi: () => {}, tz: () => applyTz(), tn: () => drawNoise() };
+  function stepEases() {
+    for (const [id, e] of eases) {
+      const to = +$(id).value, done = ++e.k >= EASE_FRAMES;
+      applied[id] = done ? to : e.from + (to - e.from) * (e.k / EASE_FRAMES);
+      APPLY[id]();
+      if (done) eases.delete(id);
+    }
+    drawGhosts();
+  }
+  function drawGhosts() {
+    for (const id of ['t', 'psi', 'tz', 'tn']) {
+      const el = $(id), g = $(id + 'g'), lo = +el.min, hi = +el.max;
+      const show = eases.has(id) && el.offsetWidth > 0 && Math.abs(applied[id] - +el.value) > (hi - lo) * 0.005;
+      g.style.display = show ? 'block' : 'none';
+      if (show) {  // the thumb centre runs from half a thumb (8 px) in from each end of the track
+        g.style.left = `${el.offsetLeft + 8 + (applied[id] - lo) / (hi - lo) * (el.offsetWidth - 16)}px`;
+        g.style.top = `${el.offsetTop + el.offsetHeight / 2}px`;
+      }
+    }
+  }
+
+  // Up to two frames in flight on the WGSL path, so the GPU never waits for the page; one when frames are slow
+  // (latency over 90 ms), so a slow GPU always draws recent inputs. fps = frames completed per second.
+  // The walk advances with time, not frames: speed is radians per second along the sphere (see walkStep).
+  // The address bar follows the inputs, at most once a second, so it can be copied or bookmarked at any time.
+  function frame() {
+    const full = !Mdl.ffhq && $('full').checked, cap = full ? 1 : capN, tNow = performance.now();
+    // The walk clock moves only when a step is taken, so each frame advances by the real time since the last one,
+    // also when the GPU is slower than the display and some refreshes start no frame.
+    if ($('walk').checked) {
+      if (!busy && inflight < cap) { walkStep(Math.min(tNow - tWalk, 250) / 1000); tWalk = tNow; dirty = true; }
+    } else tWalk = tNow;
+    if (eases.size && !busy && inflight < cap) { stepEases(); dirty = true; }
+    if (dirty && !busy && inflight < cap) {
+      dirty = false; inflight++;
+      const sig = curSig = sigNow(); tSubmit = tNow;
+      // A different image hides the full-decoder one when it is drawn, not when started, so the old TAEF2 image never shows.
+      render(zNow(), classVec(), noise).then(() => {
+        inflight--; done++; if (sig !== hqSig) hideHQ();
+        lagMs = 0.7 * lagMs + 0.3 * (performance.now() - tNow);  // submit to finished, smoothed
+        if (lagMs > 90) capN = 1; else if (lagMs < 45) capN = 2;
+      }, (e) => { inflight--; logOnce('ERROR: ' + e); });
+      urlDirty = true;
+    }
+    if (!refineOn()) { if (hqSig) hideHQ(); }
+    else if (!busy && !dirty && inflight === 0 && !$('walk').checked && !ptrDown && tNow - tSubmit > 400 && curSig && curSig !== hqSig && curSig !== reqSig)
+      startRefine(curSig).catch((e) => { reqSig = null; log('ERROR: ' + e); });
+    // Not while walking: the address bar is written once the walk stops.
+    if (urlDirty && used && !busy && !$('walk').checked && tNow - tUrl > 1000) { hist.replaceState(null, '', stateURL()); tUrl = tNow; urlDirty = false; }
+    if (tNow - tFps > 1000) {  // a rate needs continuous frames (walking, dragging); idle seconds keep the last one
+      if (done >= 3) { $('fps').textContent = `${(done * 1000 / (tNow - tFps)).toFixed(1)} fps`; $('fps').title = `Frames per second (${label()})`; }
+      done = 0; tFps = tNow;
+    }
+    if (document.activeElement !== $('zseed') && $('zseed').value !== String(seed)) $('zseed').value = seed;
+    if (document.activeElement !== $('nseed') && $('nseed').value !== String(noiseSeed)) $('nseed').value = noiseSeed;
+    drawDial();
+    requestAnimationFrame(frame);
+  }
+  // No check or benchmark at startup: they are buttons, and run off screen when pressed.
+  requestAnimationFrame(frame);
+}
+main().catch((e) => {  // Firefox stacks omit the message, so log both
+  const m = 'ERROR: ' + (e && e.message ? e.message : e);
+  log(m + (e && e.stack ? '\n' + e.stack : '')); document.getElementById('status').textContent = m;
+});
+</script>
+<!-- Firefox notice: it works, but the first image waits ~20 s for shader compilation and it runs 3-4x slower than
+     Chrome (index.html's speed table), which looks broken. Shown only in Firefox, until dismissed. -->
+<style>
+  .ffnote { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 50; box-sizing: border-box;
+    width: min(560px, calc(100% - 32px)); display: flex; gap: 14px; align-items: center; padding: 12px 14px 12px 18px;
+    background: var(--bg-soft); color: var(--ink); border: 1px solid var(--border); border-radius: 8px;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.25); font-size: 14.5px; line-height: 1.4; }
+  .ffnote[hidden] { display: none; }
+  .ffnote p { margin: 0; flex: 1; }
+  .ffnote button { flex: none; border: 0; border-radius: 6px; padding: 6px 12px; background: var(--accent); color: var(--bg);
+    font: inherit; font-weight: 600; cursor: pointer; }
+</style>
+<div class="ffnote" id="ffnote" role="status" hidden>
+  <p><b>Using Firefox?</b> The first image takes about 20 seconds while Firefox compiles the shaders, and images then
+    come 3–4 times slower than in Chrome or Edge. Nothing is broken: Chrome and Edge just run it faster.</p>
+  <button type="button">Got it</button>
+</div>
+<script>
+  (function () {
+    if (!/Firefox\//.test(navigator.userAgent)) return;
+    try { if (localStorage.getItem('r3gan2-ffnote') === 'seen') return; } catch (e) { /* no storage: show it */ }
+    var n = document.getElementById('ffnote'); n.hidden = false;
+    n.querySelector('button').onclick = function () {
+      n.hidden = true; try { localStorage.setItem('r3gan2-ffnote', 'seen'); } catch (e) { /* no storage */ }
+    };
+  })();
+</script>
+</body>
+</html>
