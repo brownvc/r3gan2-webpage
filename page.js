@@ -167,6 +167,14 @@ if ('IntersectionObserver' in window) {
 }
 startLoop();
 
+// The map video starts buffering two screens before it shows, so it is not still loading (and stalling the scroll)
+// when it starts to play.
+const video = document.querySelector('.map-video video');
+if (video && 'IntersectionObserver' in window) {
+  const vo = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting)) { vo.disconnect(); video.preload = 'auto'; } }, { rootMargin: '200% 0px' });
+  vo.observe(video);
+}
+
 // ---- the live generator: its frame loads as it nears the screen; it asks before downloading a model ----
 const demo = $('demo-frame');
 if (!navigator.gpu) {

@@ -344,24 +344,39 @@ const toNHWC = (a, P, C) => { const o = new Float32Array(P * C); for (let p = 0;
 
 async function main() {
   if (!navigator.gpu) { log('No WebGPU in this browser.'); $('status').textContent = 'This page needs WebGPU, which this browser does not offer. Recent desktop Chrome and Edge have it.'; return; }
-  const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
-  if (!adapter) {  // the API exists but no usable GPU (e.g. a Firefox build or GPU where WebGPU is not enabled yet)
-    const msg = 'This browser has WebGPU but found no usable GPU adapter. Try a current Chrome or Edge, or check the browser\'s WebGPU support for this system.';
-    log(msg); $('status').textContent = msg; return;
-  }
-  // Firefox 159 (Windows) reports shader-f16 but an FP16 TAEF2 frame never finishes (>60 s), so Firefox gets FP32
-  // everywhere.
-  const hasF16 = adapter.features.has('shader-f16') && !/Firefox\//.test(navigator.userAgent) && typeof Float16Array === 'function';  // Float16Array: Chrome 135+
+  // The GPU starts only when the demo does (Load demo clicked, or a saved model once the frame is on screen): starting
+  // WebGPU stalls the browser's GPU process for up to a second, which would stop the project page scrolling.
   const Q = new URLSearchParams(location.search);
-  const profile = Q.has('profile') && adapter.features.has('timestamp-query');
-  const device = await adapter.requestDevice({ requiredFeatures: [...(profile ? ['timestamp-query'] : []), ...(hasF16 ? ['shader-f16'] : [])] });
-  // A lost GPU (crash, driver reset): nothing more can run, so a notice with a Reload button. Errors: the first few are
-  // logged and the first is shown (logging every frame's would freeze the page).
-  device.lost.then((info) => gpuLostNotice(info.message || info.reason));
-  let gpuErrors = 0;
-  device.addEventListener('uncapturederror', (e) => { if (gpuErrors++ < 3) log('WebGPU error: ' + e.error.message); if (gpuErrors === 1) $('status').textContent = 'GPU error: ' + e.error.message; });
-  log(`GPU: ${gpuLabel(adapter.info || {})}. FP16 ${hasF16 ? 'supported' : 'not supported'}.`);
-  if (!hasF16) { $('th16').checked = false; $('th16').disabled = $('gh16').disabled = true; }
+  let adapter, device, hasF16 = false, profile = false;
+  let gpuP = null;
+  const startGPU = () => (gpuP ||= initGPU());  // once, whichever asks first (Load demo or the speed test)
+  async function initGPU() {
+    adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+    if (!adapter) {  // the API exists but no usable GPU (e.g. a Firefox build or GPU where WebGPU is not enabled yet)
+      const msg = 'This browser has WebGPU but found no usable GPU adapter. Try a current Chrome or Edge, or check the browser\'s WebGPU support for this system.';
+      log(msg); $('status').textContent = msg; return false;
+    }
+    // Firefox 159 (Windows) reports shader-f16 but an FP16 TAEF2 frame never finishes (>60 s), so Firefox gets FP32
+    // everywhere.
+    hasF16 = adapter.features.has('shader-f16') && !/Firefox\//.test(navigator.userAgent) && typeof Float16Array === 'function';  // Float16Array: Chrome 135+
+    profile = Q.has('profile') && adapter.features.has('timestamp-query');
+    device = await adapter.requestDevice({ requiredFeatures: [...(profile ? ['timestamp-query'] : []), ...(hasF16 ? ['shader-f16'] : [])] });
+    // A lost GPU (crash, driver reset): nothing more can run, so a notice with a Reload button. Errors: the first few
+    // are logged and the first is shown (logging every frame's would freeze the page).
+    device.lost.then((info) => gpuLostNotice(info.message || info.reason));
+    let gpuErrors = 0;
+    device.addEventListener('uncapturederror', (e) => { if (gpuErrors++ < 3) log('WebGPU error: ' + e.error.message); if (gpuErrors === 1) $('status').textContent = 'GPU error: ' + e.error.message; });
+    log(`GPU: ${gpuLabel(adapter.info || {})}. FP16 ${hasF16 ? 'supported' : 'not supported'}.`);
+    if (!hasF16) { $('th16').checked = false; $('th16').disabled = $('gh16').disabled = true; }
+    return true;
+  }
+  // Inside the project page, the frame's own view of whether it is on screen: off screen, nothing starts or runs.
+  let onScreen = true;
+  if (window !== top && 'IntersectionObserver' in window) {
+    onScreen = false;
+    new IntersectionObserver((es) => { onScreen = es.some((e) => e.isIntersecting); }).observe(document.documentElement);
+  }
+  const untilOnScreen = () => new Promise((go) => { const t = setInterval(() => { if (onScreen) { clearInterval(t); go(); } }, 100); });
   $('gh16').checked = false; $('full').checked = false;  // Chrome restores checkbox state on reload
   if (SMALL_DEVICE) { $('full').disabled = true; $('full').parentElement.title = 'Needs a larger device'; }  // the 200 MB FP32 decoder
 
@@ -759,7 +774,7 @@ async function main() {
   ['th16', 'gh16', 'full'].forEach((id) => $(id).onchange = () => { dirty = true; });
   $('check').onclick = () => { if (!busy) exclusive(check); };
   $('bench').onclick = () => { if (!busy) exclusive(bench); };
-  $('report').onclick = async () => { if (busy) return; $('report').disabled = true; try { await speedReport(); } catch (e) { log('ERROR: ' + e); } $('report').disabled = false; };
+  $('report').onclick = async () => { if (busy) return; $('report').disabled = true; try { if (device || await startGPU()) await speedReport(); } catch (e) { log('ERROR: ' + e); } $('report').disabled = false; };
   let gatePick = null;  // set while the page waits for a first click to download (see the start below)
   document.querySelectorAll('.mbtn').forEach((b) => b.onclick = () => { if (gatePick) gatePick(b.dataset.m); else if (!busy && Mdl && b.dataset.m !== Mdl.code) switchModel(b.dataset.m); });
   // Paper figure classes: set class A (blend 0), keep z and noise.
@@ -823,6 +838,8 @@ async function main() {
     gatePick = (c) => (have.has(c) ? load(c) : show(c));  // a saved model needs no asking
     b.onclick = () => load(first);
   });
+  else await untilOnScreen();  // a saved model loads without a click, but not while the page scrolls past
+  if (!await startGPU()) return;
   await switchModel(first);
   if (!Mdl) return;
 
@@ -928,6 +945,9 @@ async function main() {
   // The address bar follows the inputs, at most once a second, so it can be copied or bookmarked at any time.
   function frame() {
     const full = !Mdl.ffhq && $('full').checked, cap = full ? 1 : capN, tNow = performance.now();
+    // Off screen (the project page scrolled elsewhere): no frames and no refine, so the page keeps the GPU to scroll
+    // with; the walk resumes where it was.
+    if (!onScreen) { tWalk = tFps = tNow; done = 0; requestAnimationFrame(frame); return; }
     // The walk clock moves only when a step is taken, so each frame advances by the real time since the last one,
     // also when the GPU is slower than the display and some refreshes start no frame.
     if ($('walk').checked) {
