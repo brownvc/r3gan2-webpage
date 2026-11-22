@@ -74,6 +74,9 @@ with sync_playwright() as p:
     pg.goto(URL + '&zoom=900', wait_until='load'); pg.wait_for_function(f'{G} && {G}.inView > 5000', timeout=180000); pg.wait_for_timeout(20000)
     s = pg.evaluate(G); check(s['previews'] > s['made'] > 0, f"far out, previews come first: {s['previews']} previews, {s['made']} decoded, {s['drawn']} of {s['inView']} shown")
     check(s['remade'] == 0, f"far out, a still view makes no cell twice: {s['remade']} remade")
+    try: pg.wait_for_function(f'{G}.mini >= {G}.miniN', timeout=20000); ok = True
+    except Exception: ok = False
+    check(ok, f"the noise globe fills all the way while the class globe is busy: {pg.evaluate(f'{G}.mini')} of {s['miniN']} (20 s more allowed)")
     check(s['labels'] >= 10, f"far out, labels: {s['labels']}")
     pg.keyboard.press('p'); pg.wait_for_timeout(1500); m0 = pg.evaluate(f'{G}.made'); pg.wait_for_timeout(2500); m1 = pg.evaluate(f'{G}.made')
     check(m1 == m0, f'P pauses: {m0} -> {m1} made')

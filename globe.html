@@ -176,7 +176,7 @@
 
 <script type="module">
 import { createLab, MODELS, weightsFile, fileExists, savedInBrowser, gauss, Z, fmt, SMALL_DEVICE } from './lab.js?v=20261121a';
-import { geodesic, classMix, directions, tileZ, noiseField, noisePoint, tierFor } from './globe.js?v=20261122e';
+import { geodesic, classMix, directions, tileZ, noiseField, noisePoint, tierFor } from './globe.js?v=20261122f';
 const $ = (id) => document.getElementById(id);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 // Left out, as on the map: clothing classes whose training photos are mostly people in swimwear or underwear.
@@ -653,29 +653,38 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
   }
   // The minimap's tiles are made only when the main globe has nothing to do: they differ little from each other, so they
   // are a backdrop, not a priority. 162 points of the noise sphere, for the class mix at the main view's centre.
-  const mg = geodesic(2); let miniImg = [], miniKey = '', miniBusy = false;
+  const mg = geodesic(2); let miniImg = [], miniKey = '';
   const miniRad = Array.from({ length: mg.n }, (_, i) => {  // each cell's circumradius, as rad[] for the main globe
     let m = 0; for (let j = mg.cellStart[i]; j < mg.cellStart[i + 1]; j++) m = Math.max(m, Math.hypot(...[0, 1, 2].map((t) => mg.corners[3 * j + t] - mg.centres[3 * i + t])));
     return m;
   });
   // A tile drawn at Vm y holds the noise Dm^T Vm y, so its key carries that turn (rounded: a small turn keeps the
-  // tiles). Old tiles stay drawn until replaced, the front first.
-  const miniOf = [];
-  setInterval(() => {
-    if (held || miniBusy || switching || G.lost || inflight || inflightP || want.length || centreCell < 0) return;
+  // tiles; a drag on the minimap turns Dm and Vm together, so it keeps them all). Every tile, back included, gets its
+  // Conv-decoded latent (32 px, cheap), one at a time even while the class globe has work, so the minimap is whole
+  // and can be spun at once; a tile is decoded with TAEF2 only when the class globe has nothing to do. Front first;
+  // old tiles stay drawn until replaced.
+  const miniOf = [], miniDec = [], miniPend = new Set(), MINI_SLOTS = 3;
+  function miniPump() {
+    if (held || switching || G.lost || centreCell < 0 || miniPend.size >= MINI_SLOTS) return;
     const H = mul(tr(Dm), Vm), mix = mixAt(centreCell);
     const key = [mixKey(mix), psi, noiseSeed, noiseStr, G.model, G.options.half, G.options.gHalf, H.map((x) => Math.round(x * 20)).join()].join('|');
     miniKey = key;
-    let i = -1, best = -2;
-    for (let k = 0; k < mg.n; k++) if (miniOf[k] !== key) { const vz = Vm[6] * mg.centres[3 * k] + Vm[7] * mg.centres[3 * k + 1] + Vm[8] * mg.centres[3 * k + 2]; if (vz > best) { best = vz; i = k; } }
+    const idle = !inflight && !inflightP && !want.length, front = (k) => Vm[6] * mg.centres[3 * k] + Vm[7] * mg.centres[3 * k + 1] + Vm[8] * mg.centres[3 * k + 2];
+    let i = -1, best = -2, dec = false;
+    for (let k = 0; k < mg.n; k++) if (miniOf[k] !== key && !miniPend.has(k) && front(k) > best) { best = front(k); i = k; }
+    if (i < 0 && idle && !miniPend.size) { dec = true; for (let k = 0; k < mg.n; k++) if (!miniDec[k] && front(k) > best) { best = front(k); i = k; } }
     if (i < 0) return;
-    miniBusy = true;
+    const pv = !dec && !!G.preview;
+    miniPend.add(i);
     const y = [mg.centres[3 * i], mg.centres[3 * i + 1], mg.centres[3 * i + 2]], q = [0, 1, 2].map((a) => H[3 * a] * y[0] + H[3 * a + 1] * y[1] + H[3 * a + 2] * y[2]);
-    G.generate(tileZ(dirsFor(mix).V, q, psi, Z0), Float32Array.from(G.classVec(mix)), NOISE)
-      .then((img) => createImageBitmap(img, { resizeWidth: 64, resizeHeight: 64, resizeQuality: 'high' }))
-      .then((b) => { if (key === miniKey) { if (miniImg[i]) miniImg[i].close(); miniImg[i] = b; miniOf[i] = key; } else b.close(); })
-      .catch((e) => console.error(e)).finally(() => { miniBusy = false; });
-  }, 50);
+    const z = tileZ(dirsFor(mix).V, q, psi, Z0), c = Float32Array.from(G.classVec(mix));
+    (pv ? G.preview(z, c, NOISE).then((r) => r.fit) : G.generate(z, c, NOISE))
+      .then((img) => createImageBitmap(img, pv ? {} : { resizeWidth: 64, resizeHeight: 64, resizeQuality: 'high' }))
+      .then((b) => { if (key === miniKey) { if (miniImg[i]) miniImg[i].close(); miniImg[i] = b; miniOf[i] = key; miniDec[i] = !pv; } else b.close(); })
+      .catch((e) => console.error(e)).finally(() => { miniPend.delete(i); miniPump(); });
+    miniPump();
+  }
+  setInterval(miniPump, 50);
   requestAnimationFrame(drawMini);
   requestAnimationFrame(frame);
 }
