@@ -49,7 +49,33 @@ export function geodesic(levels) {
     fs.sort((a, b) => ang(a) - ang(b));
     fs.forEach((f, j) => corners.set(cen.subarray(3 * f, 3 * f + 3), 3 * (cellStart[i] + j)));
   }
-  return { n, centres: Float32Array.from(V), cellStart, corners };
+  return { n, centres: Float32Array.from(V), cellStart, corners, faces: Uint32Array.from(F.flat()), around };
+}
+
+// The noise field over the globe: where the map blends random anchors in 64 dimensions (nearly orthogonal there, so
+// a blend never comes near zero), here the noise point is 3-D, where two random points can be nearly opposite and a
+// blend between them would flip. So each tile's noise point is e3 turned by a rotation that varies smoothly over the
+// surface: rotation vector w(p) = sum of M random waves b_m sin(k_m . p + phi_m), |k_m| = K (wavelength 2 pi / K on
+// the unit sphere: K = 26 turns the point ~45 degrees over 4 tiles at the median, steps of at most ~60 degrees per tile).
+// Always unit length, continuous everywhere. Seeded, so a link reproduces it.
+export function noiseField(seed, K = 26, M = 12) {
+  let s = seed >>> 0;
+  const rand = () => { s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const gauss = () => Math.sqrt(-2 * Math.log(1 - rand())) * Math.cos(2 * Math.PI * rand());
+  const waves = [], amp = 2 / Math.sqrt(M / 2);  // the rotation angle's spread ~2 radians
+  for (let m = 0; m < M; m++) {
+    const k = [gauss(), gauss(), gauss()], r = Math.hypot(...k);
+    waves.push({ k: k.map((x) => (K * x) / r), phi: 2 * Math.PI * rand(), b: [gauss(), gauss(), gauss()].map((x) => amp * x) });
+  }
+  return { waves };
+}
+
+export function noisePoint(F, p) {
+  const w = [0, 0, 0];
+  for (const { k, phi, b } of F.waves) { const s = Math.sin(k[0] * p[0] + k[1] * p[1] + k[2] * p[2] + phi); w[0] += b[0] * s; w[1] += b[1] * s; w[2] += b[2] * s; }
+  const th = Math.hypot(...w); if (th < 1e-12) return [0, 0, 1];
+  const a = w.map((x) => x / th), c = Math.cos(th), sn = Math.sin(th);  // Rodrigues: rotate e3 about a by th
+  return [a[0] * a[2] * (1 - c) + a[1] * sn, a[1] * a[2] * (1 - c) - a[0] * sn, c + a[2] * a[2] * (1 - c)];
 }
 
 // ponytail: brute force over all centres (~0.5 ms); a spatial index if it is ever called per frame

@@ -151,10 +151,11 @@
           <input id="trunc" type="range" min="0" max="2" step="0.05" value="1" title="Scales z: below 1, more typical and less varied; above 1, more varied">
           <div class="ends"><span>More typical</span><span>More varied</span></div>
         </div>
-        <h3>Per-pixel noise</h3>
+        <h3>Noise seed</h3>
+        <p class="help">Sets the noise field over the globe and the per-pixel noise; the link keeps it.</p>
         <div class="bar"><label for="nseed">Seed</label><input id="nseed" type="number" min="0" max="999999" step="1"><button class="plain" id="newn">Random</button></div>
         <div class="slider">
-          <div class="slabel"><label for="nstr">Strength</label><span class="val" id="nstrv"></span></div>
+          <div class="slabel"><label for="nstr">Per-pixel noise</label><span class="val" id="nstrv"></span></div>
           <input id="nstr" type="range" min="0" max="2" step="0.1" value="1" title="Scales the per-pixel noise: 0 leaves it out, 1 is what the model was trained with">
           <div class="ends"><span>None</span><span>Twice</span></div>
         </div>
@@ -173,7 +174,7 @@
 
 <script type="module">
 import { createLab, MODELS, weightsFile, fileExists, savedInBrowser, gauss, Z, fmt, DATA, SMALL_DEVICE } from './lab.js?v=20261121a';
-import { geodesic, classMix, directions, tileZ } from './globe.js?v=20261122a';
+import { geodesic, classMix, directions, tileZ, noiseField, noisePoint } from './globe.js?v=20261122b';
 const $ = (id) => document.getElementById(id);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 // Left out, as on the map: clothing classes whose training photos are mostly people in swimwear or underwear.
@@ -257,7 +258,14 @@ async function main() {
   }
   const centre = (i) => [g.centres[3 * i], g.centres[3 * i + 1], g.centres[3 * i + 2]];
   const mixAt = (i) => (mixCache[i] ??= classMix(GF.points, centre(i), soft, blocked));
-  function tileInputs(i) { const mix = mixAt(i); return { z: tileZ(dirsFor(mix).V, P, psi), mix }; }
+  // Each tile's noise point: the smooth random field at its place on the globe (as the map's anchors vary its z),
+  // turned by the noise minimap's rotation, so spinning the minimap moves every tile's noise together.
+  let NF = noiseField(noiseSeed), qCache = new Array(N);
+  function tileInputs(i) {
+    const mix = mixAt(i), q = (qCache[i] ??= noisePoint(NF, centre(i)));
+    const qq = [0, 1, 2].map((t) => Mm[t] * q[0] + Mm[3 + t] * q[1] + Mm[6 + t] * q[2]);  // Mm^T q
+    return { z: tileZ(dirsFor(mix).V, qq, psi), mix };
+  }
 
   // ---- tile images: GPU texture arrays at 16, 64 and 256 px. Every tile made keeps a 16 px copy; 64 and 256 px keep
   // the most recently made (LRU). A cell draws from the largest it has that its size on screen needs. ----
@@ -519,8 +527,9 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
   $('trunc').oninput = () => { psi = +$('trunc').value; remake(); showConfig(); };
   $('soft').oninput = () => { soft = +$('soft').value; mixCache = new Array(N); remake(); showConfig(); };
   $('nstr').oninput = () => { noiseStr = +$('nstr').value; NOISE = makeNoise(); remake(); showConfig(); };
-  $('nseed').onchange = () => { noiseSeed = clamp(Math.round(+$('nseed').value) || 0, 0, 999999); NOISE = makeNoise(); remake(); showConfig(); };
-  $('newn').onclick = () => { noiseSeed = randSeed(); NOISE = makeNoise(); remake(); showConfig(); };
+  const newField = () => { NF = noiseField(noiseSeed); qCache = new Array(N); };
+  $('nseed').onchange = () => { noiseSeed = clamp(Math.round(+$('nseed').value) || 0, 0, 999999); NOISE = makeNoise(); newField(); remake(); showConfig(); };
+  $('newn').onclick = () => { noiseSeed = randSeed(); NOISE = makeNoise(); newField(); remake(); showConfig(); };
   for (const c of Object.keys(MODELS)) {
     const el = document.querySelector(`.segsub [data-m="${c}"]`);
     el.textContent = !avail[c] ? 'not available' : (await savedInBrowser(weightsFile(c))) ? 'cached weights' : `${MODELS[c].mb} MB download`;

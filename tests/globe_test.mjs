@@ -1,6 +1,6 @@
 // Tests for globe.js (the class globe: tiling, class field, noise directions). Run: node tests/globe_test.mjs
 import assert from 'node:assert/strict';
-import { geodesic, cellAt, classMix, directions, tileZ } from '../globe.js';
+import { geodesic, cellAt, classMix, directions, tileZ, noiseField, noisePoint } from '../globe.js';
 
 const dot = (a, b) => a.reduce((s, x, i) => s + x * b[i], 0);
 const norm = (a) => Math.sqrt(dot(a, a));
@@ -77,6 +77,23 @@ const tests = {
     const { V, share } = directions({ 0: 0.5, 1: 0.3, 2: 0.2 }, synthAxes(4), E3);
     assert.ok(V.every(Number.isFinite) && share > 0 && share <= 1, `share ${share}`);
     for (let a = 0; a < 3; a++) for (let b = 0; b < 3; b++) assert.ok(Math.abs(dot(row(V, a), row(V, b)) - (a === b)) < 1e-4, 'orthonormal');
+  },
+  noiseField() {  // the noise point varies smoothly over the globe, every few tiles, and covers the noise sphere
+    const F = noiseField(123), p0 = vec(g.centres, 5);
+    assert.deepEqual(noisePoint(noiseField(123), p0), noisePoint(F, p0), 'same seed, same field');
+    assert.notDeepEqual(noisePoint(noiseField(124), p0), noisePoint(F, p0), 'another seed, another field');
+    const sp = Math.sqrt(4 * Math.PI / g.n), a1 = [], a4 = [], mean = [0, 0, 0];  // sp: the tile spacing
+    for (let i = 0; i < g.n; i += 37) {
+      const c = vec(g.centres, i), d = unit(vec(g.corners, g.cellStart[i]).map((x, t) => x - c[t]));
+      const at = (s) => unit(c.map((x, t) => x + s * sp * d[t])), q = noisePoint(F, c);
+      assert.ok(Math.abs(norm(q) - 1) < 1e-6, 'unit');
+      a1.push(Math.acos(Math.min(1, dot(q, noisePoint(F, at(1)))))); a4.push(Math.acos(Math.min(1, dot(q, noisePoint(F, at(4))))));
+      for (let t = 0; t < 3; t++) mean[t] += q[t] / Math.ceil(g.n / 37);
+    }
+    a1.sort((x, y) => x - y); a4.sort((x, y) => x - y); const deg = (x) => (x * 180) / Math.PI;
+    assert.ok(deg(a1[a1.length - 1]) < 65, `a one-tile step turns the noise point by up to ${deg(a1[a1.length - 1])} degrees`);
+    assert.ok(deg(a4[a4.length >> 1]) > 35, `over 4 tiles the median turn is only ${deg(a4[a4.length >> 1])} degrees`);
+    assert.ok(norm(mean) < 0.3, `noise points bunched: mean resultant ${norm(mean)}`);
   },
   tileZ() {
     const { V } = directions({ 0: 1 }, synthAxes(4), E3), p = unit([0.3, -0.5, 0.8]);
