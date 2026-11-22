@@ -281,11 +281,13 @@ export function gridTargets(view, pos, nb, st, anchor) {
   const L = Math.hypot(...st.e1), u = [st.e1[0] / L, st.e1[1] / L], w = [-u[1], u[0]];
   const sh = (b) => ((b % 2) + 2) % 2 ? -0.25 : 0.25, la = st.lab.get(anchor) || [0, 0], out = new Map(), claim = new Map();
   for (const c of view) {
-    const l = st.lab.get(c); if (!l) { out.set(c, { T: pos.get(c), w: 0 }); continue; }
-    const da = l[0] - la[0], db = l[1] - la[1], x = L * (da + 0.5 * db + sh(l[1])), y = L * SQ3 * db;
-    const T = [P[0] + x * u[0] + y * w[0], P[1] + x * u[1] + y * w[1]], key = `${l[0]},${l[1]}`;
+    const l = st.lab.get(c); if (!l) { out.set(c, { T: pos.get(c), B: pos.get(c), slide: 0, w: 0 }); continue; }
+    const da = l[0] - la[0], db = l[1] - la[1], s = sh(l[1]), x = L * (da + 0.5 * db), y = L * SQ3 * db;
+    // B: the cell's place in the lattice (a brick wall once reshaped); T: after its row slides s cells along the rows
+    const B = [P[0] + x * u[0] + y * w[0], P[1] + x * u[1] + y * w[1]];
+    const T = [B[0] + s * L * u[0], B[1] + s * L * u[1]], key = `${l[0]},${l[1]}`;
     const far = Math.hypot(T[0] - pos.get(c)[0], T[1] - pos.get(c)[1]) / L;
-    out.set(c, { T, w: Math.max(0, Math.min(1, (1 - far) / 0.25)) });
+    out.set(c, { T, B, slide: s / 0.25, w: Math.max(0, Math.min(1, (1 - far) / 0.25)) });
     claim.set(key, (claim.get(key) || 0) + 1);
   }
   for (const c of view) { const l = st.lab.get(c); if (l && claim.get(`${l[0]},${l[1]}`) > 1) out.get(c).w = 0; }

@@ -190,7 +190,7 @@
 
 <script type="module">
 import { createLab, MODELS, weightsFile, fileExists, savedInBrowser, gauss, Z, fmt, SMALL_DEVICE } from './lab.js?v=20261121a';
-import { geodesic, classMix, directions, tileZ, noiseField, noisePoint, tierFor, neighbours, gridTargets, anchorWeights, nearestSpacing } from './globe.js?v=20261122j';
+import { geodesic, classMix, directions, tileZ, noiseField, noisePoint, tierFor, neighbours, gridTargets, anchorWeights, nearestSpacing } from './globe.js?v=20261122k';
 const $ = (id) => document.getElementById(id);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 // Left out, as on the map: clothing classes whose training photos are mostly people in swimwear or underwear.
@@ -354,7 +354,7 @@ async function main() {
 // half width and half height (unit-sphere units)
 struct U { r0: vec4f, r1: vec4f, r2: vec4f, sc: vec4f, gr: vec4f };
 @group(0) @binding(0) var<uniform> u: U;
-@group(0) @binding(7) var<storage, read> morph: array<vec4f>;  // per instance: its grid place (x, y), how far reshaped
+@group(0) @binding(7) var<storage, read> morph: array<vec4f>;  // per instance: its brick place (x, y), how far reshaped, its row slide (+-1)
 @group(0) @binding(1) var<storage, read> cells: array<vec4f>;
 @group(0) @binding(2) var<storage, read> inst: array<vec4u>;     // cell, tier, slot, -
 @group(0) @binding(3) var smp: sampler;
@@ -374,21 +374,23 @@ fn rot(p: vec3f) -> vec3f { return vec3f(dot(u.r0.xyz, p), dot(u.r1.xyz, p), dot
   if (length(up) < 1e-4) { up = vec3f(0.0, 0.0, 1.0) - c.z * c; }
   up = normalize(up); let rt = cross(up, c); let d = q - c;
   var p = q.xy; var uv = vec2f(0.5) + vec2f(dot(d, rt), -dot(d, up)) / (2.0 * c4.w);
-  // close in: the hexagon reshapes into its grid rectangle. Its corners lie between its neighbours (30, 90, 150...
-  // degrees from the row direction): the four diagonal ones go to the rectangle's corners, the two across the row to
-  // its top and bottom middles; the image goes to the whole rectangle (the full width, cropped top and bottom).
+  // close in: the hexagon reshapes into its grid rectangle, in two phases, neither opening a gap. First (s1) it
+  // flattens into a brick where the lattice puts it (m.xy): its corners lie between its neighbours (30, 90, 150...
+  // degrees from the row direction); the four diagonal ones go to the brick's corners, the two across the row to its top
+  // and bottom middles, and since every corner is shared by three cells that all send it to the same place, the cells
+  // stay edge to edge (a brick wall). Then (s2) alternate rows slide a quarter cell (m.w: which way) along their now
+  // straight seams, lining the columns up. The image goes to the whole brick (full width, cropped top and bottom).
   let m = morph[ii];
   if (m.z > 0.0) {
-    let e = u.gr.xy; let f = vec2f(-e.y, e.x); let T = m.xy;
-    var s = T;
+    let e = u.gr.xy; let f = vec2f(-e.y, e.x); let B = m.xy;
+    let s1 = smoothstep(0.0, 1.0, clamp(2.0 * m.z, 0.0, 1.0)); let s2 = smoothstep(0.0, 1.0, clamp(2.0 * m.z - 1.0, 0.0, 1.0));
+    var s = B;
     if (k != 0u) {
       let dd = q.xy - c.xy; let a = dot(dd, e) / max(length(dd), 1e-9); let sb = select(-1.0, 1.0, dot(dd, f) > 0.0);
-      if (abs(a) < 0.25) { s = T + sb * u.gr.w * f; } else { s = T + sign(a) * u.gr.z * e + sb * u.gr.w * f; }
+      if (abs(a) < 0.25) { s = B + sb * u.gr.w * f; } else { s = B + sign(a) * u.gr.z * e + sb * u.gr.w * f; }
     }
-    let uvs = vec2f(0.5) + vec2f(dot(s - T, e), -dot(s - T, f)) / (2.0 * u.gr.z);
-    p = mix(p, s, m.z); uv = mix(uv, uvs, m.z);
-    // midway, neighbours' shared corners go different ways: each cell grows a little about its centre, so they overlap
-    let cm = mix(c.xy, T, m.z); p = cm + (p - cm) * (1.0 + 0.3 * sin(3.14159265 * m.z));
+    let uvs = vec2f(0.5) + vec2f(dot(s - B, e), -dot(s - B, f)) / (2.0 * u.gr.z);
+    p = mix(p, s, s1) + s2 * m.w * 0.5 * u.gr.z * e; uv = mix(uv, uvs, s1);
   }
   var o: O;
   o.pos = vec4f(p.x * u.sc.x, p.y * u.sc.y, 0.5, 1.0);
@@ -548,7 +550,7 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
       gr = [gst.e1[0] / L, gst.e1[1] / L, 0.5 * L / S, (Math.sqrt(3) / 4) * L / S];
       for (let j = 0; j < n; j++) {
         const t = tg.get(inst[4 * j]); const w = t ? t.w : 0; if (w > 0) gridded++;
-        morphArr[4 * j] = t ? t.T[0] / S : 0; morphArr[4 * j + 1] = t ? t.T[1] / S : 0; morphArr[4 * j + 2] = morphT * w;
+        morphArr[4 * j] = t ? t.B[0] / S : 0; morphArr[4 * j + 1] = t ? t.B[1] / S : 0; morphArr[4 * j + 2] = morphT * w; morphArr[4 * j + 3] = t ? t.slide : 0;
       }
     } else { gst = {}; morphArr.fill(0, 0, 4 * n); }
     dev.queue.writeBuffer(uniBuf, 0, new Float32Array([...Rm.slice(0, 3), 0, ...Rm.slice(3, 6), 0, ...Rm.slice(6, 9), 0, sx, sy, SIDE, 0, ...gr]));

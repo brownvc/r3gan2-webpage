@@ -142,6 +142,16 @@ const tests = {
       const key = `${Math.round(x - x0)},${Math.round(y)}`; assert.ok(!seen.has(key), `two cells at ${key}`); seen.add(key);
     }
   },
+  gridTargetsBricks() {  // before its row slides, a cell sits where the lattice puts it (a brick wall); the slide is a quarter cell
+    const H = hexLattice(), T = gridTargets(H.view, H.pos, H.nb, {}, H.id(0, 0)), u = [Math.cos(H.th), Math.sin(H.th)];
+    for (const c of H.view) {
+      const t = T.get(c), p = H.pos.get(c);
+      assert.ok(Math.hypot(t.B[0] - p[0], t.B[1] - p[1]) < 1e-6, `cell ${c}: brick ${t.B} vs ${p}`);
+      const d = [t.T[0] - t.B[0], t.T[1] - t.B[1]];
+      assert.ok(Math.abs(Math.abs(d[0] * u[0] + d[1] * u[1]) - 0.25 * H.L) < 1e-6 && Math.abs(-d[0] * u[1] + d[1] * u[0]) < 1e-6, `cell ${c}: slide ${d}`);
+      assert.ok(Math.abs(t.slide) === 1 && Math.abs((d[0] * u[0] + d[1] * u[1]) - t.slide * 0.25 * H.L) < 1e-6, `cell ${c}: slide sign ${t.slide}`);
+    }
+  },
   gridTargetsSteady() {  // panning moves the anchor: the grid must not jump (no row-parity flip), and labels persist
     const H = hexLattice(), st = {}, A = gridTargets(H.view, H.pos, H.nb, st, H.id(0, 0));
     for (const a of [H.id(1, 1), H.id(0, 1), H.id(-2, 3)]) {
