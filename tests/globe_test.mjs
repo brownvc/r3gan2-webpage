@@ -121,15 +121,6 @@ const tests = {
     const rest = (v) => { const o = v.slice(); for (let a = 0; a < 3; a++) { const d = dot(v, row(V, a)); for (let t = 0; t < 64; t++) o[t] -= d * V[a * 64 + t]; } return o; };
     assert.ok(Math.max(...rest(z).map((x, t) => Math.abs(x - rest(Array.from(z0))[t]))) < 1e-5, 'elsewhere z is the seed’s');
   },
-  parents() {  // every finer vertex has a parent in a coarser level, about one of its own spacings away
-    const levelOf = (i) => { let k = 0; while (i >= 10 * 4 ** k + 2) k++; return k; };
-    for (let i = 12; i < g.n; i += 13) {
-      const k = levelOf(i), j = g.parent[i];
-      assert.ok(levelOf(j) < k, `vertex ${i} (level ${k}): parent ${j} is not coarser`);
-      const ang = Math.acos(Math.min(1, dot(vec(g.centres, i), vec(g.centres, j))));
-      assert.ok(ang < 1.5 * Math.sqrt(4 * Math.PI / (10 * 4 ** k + 2)), `vertex ${i}: parent ${ang} rad away`);
-    }
-  },
 };
 let failed = 0;
 for (const [name, t] of Object.entries(tests)) {

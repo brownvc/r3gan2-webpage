@@ -176,7 +176,7 @@
 
 <script type="module">
 import { createLab, MODELS, weightsFile, fileExists, savedInBrowser, gauss, Z, fmt, SMALL_DEVICE } from './lab.js?v=20261121a';
-import { geodesic, classMix, directions, tileZ, noiseField, noisePoint, tierFor } from './globe.js?v=20261122d';
+import { geodesic, classMix, directions, tileZ, noiseField, noisePoint, tierFor } from './globe.js?v=20261122e';
 const $ = (id) => document.getElementById(id);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 // Left out, as on the map: clothing classes whose training photos are mostly people in swimwear or underwear.
@@ -298,6 +298,10 @@ async function main() {
     const bmps = await Promise.all([16, 64].map((s) => createImageBitmap(img, { resizeWidth: s, resizeHeight: s, resizeQuality: 'high' })).concat(createImageBitmap(img)));
     TIERS.forEach((T, t) => { put(T, cell, bmps[t]); bmps[t].close(); });
   }
+  async function storePreview(cell, img) {  // the 32 px latent preview: the smallest tier only, until the decode replaces it
+    const b = await createImageBitmap(img, { resizeWidth: 16, resizeHeight: 16, resizeQuality: 'high' });
+    put(T16, cell, b); b.close();
+  }
 
   // ---- drawing ----
   const cv = $('globe'), lc = $('labels'), lctx = lc.getContext('2d'), wrap = $('wrap');
@@ -410,29 +414,38 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
 
   // ---- generation: the tiles in view that lack an image for this epoch (or a large enough one), nearest the centre
   // first, as many in flight as the lab has slots ----
-  let inflight = 0, madeN = 0, want = [], switching = false, fails = 0, held = false;
+  // As on the map: a cell showing nothing gets its latent preview first (G.preview, 32 px, kept on the GPU for its
+  // decode), then is decoded; previews and decodes each have their own slots, and both go nearest the centre first.
+  let inflight = 0, inflightP = 0, madeN = 0, previewsN = 0, remadeN = 0, want = [], switching = false, fails = 0, held = false;
   const pending = new Set();
   function pump() {
     if (held || switching || G.lost || document.hidden) return;
-    while (inflight < G.slots && want.length) {
-      const cell = want.shift(); if (pending.has(cell)) continue;
-      pending.add(cell); inflight++;
-      const ep = epoch, { z, mix } = tileInputs(cell), c = Float32Array.from(G.classVec(mix));
-      G.generate(z, c, NOISE)
-        .then((img) => (ep === epoch ? store(cell, img).then(() => { made[cell] = ep; madeN++; fails = 0; }) : null))
+    const pvSlots = G.preview ? G.previewSlots : 0;
+    for (let k = 0; k < want.length && (inflight < G.slots || inflightP < pvSlots);) {
+      const cell = want[k]; if (pending.has(cell)) { want.splice(k, 1); continue; }
+      const pv = pvSlots > 0 && !T16.slot.has(cell);
+      if (pv ? inflightP >= pvSlots : inflight >= G.slots) { k++; continue; }
+      want.splice(k, 1); pending.add(cell); if (pv) inflightP++; else inflight++;
+      if (!pv && made[cell] === epoch) remadeN++;  // a sharper copy of a cell already made (its larger one was evicted)
+      const ep = epoch, { z, mix } = tileInputs(cell), c = Float32Array.from(G.classVec(mix)), keep = pvSlots ? cell : undefined;
+      (pv ? G.preview(z, c, NOISE, keep) : G.generate(z, c, NOISE, undefined, keep))
+        .then((r) => {
+          fails = 0; if (ep !== epoch) return null;
+          if (pv) { previewsN++; return made[cell] === ep ? null : storePreview(cell, r.fit); }
+          return store(cell, r).then(() => { made[cell] = ep; madeN++; });
+        })
         .catch((e) => { console.error(e); if (++fails > 6) { switching = true; $('cfgnote').textContent = `Tiles are failing to generate: ${e.message || e}`; } })
-        .finally(() => { pending.delete(cell); inflight--; pump(); });
+        .finally(() => { pending.delete(cell); if (pv) inflightP--; else inflight--; pump(); });
     }
   }
-  function remake() { epoch++; want = []; }  // new inputs: every tile is made again; old images show until replaced
+  function remake() { epoch++; want = []; G.dropLatents(); }  // new inputs: every tile is made again; old images show until replaced
 
   // ---- the frame ----
-  const inst = new Uint32Array(MAXI * 4), CAPS = TIERS.map((T, t) => (t ? T.cap : Infinity)); let drawn = 0, shown = 0, inView = 0, lastInView = 0, centreCell = -1;
-  const level = new Uint8Array(N).map((_, i) => { let k = 0; while (i >= 10 * 4 ** k + 2) k++; return k; });  // the cell's tiling level
+  const inst = new Uint32Array(MAXI * 4), CAPS = TIERS.map((T, t) => (t ? T.cap : Infinity)); let drawn = 0, inView = 0, lastInView = 0, centreCell = -1;
   function frame() {
     const S = zoom * dpr, sx = 2 * S / W, sy = 2 * S / H;
     dev.queue.writeBuffer(uniBuf, 0, new Float32Array([...Rm.slice(0, 3), 0, ...Rm.slice(3, 6), 0, ...Rm.slice(6, 9), 0, sx, sy, SIDE, 0]));
-    const cand = []; let n = 0, own = 0, best = -2; inView = 0;
+    const cand = []; let n = 0, best = -2; inView = 0;
     const hw = W / 2, hh = H / 2;
     for (let i = 0; i < N; i++) {
       const x = g.centres[3 * i], y = g.centres[3 * i + 1], zc = g.centres[3 * i + 2];
@@ -443,24 +456,20 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
       if (vz > best) { best = vz; centreCell = i; }  // the point facing the viewer
       const cellPx = 2 * rp, need = tierFor(cellPx, lastInView, CAPS);
       const have = T256.slot.has(i) && need >= 2 ? 2 : T64.slot.has(i) && need >= 1 ? 1 : T16.slot.has(i) ? 0 : -1;
-      if (have >= 0) own++;
-      // a cell with no image yet shows its nearest made ancestor's (coarse cells are made first), so the view is whole
-      let src = i, t = have; if (t < 0) { while (!T16.slot.has(src) && g.parent[src] !== src) src = g.parent[src]; t = T16.slot.has(src) ? 0 : -1; }
-      if (t >= 0 && n < MAXI) { inst[4 * n] = i; inst[4 * n + 1] = t; inst[4 * n + 2] = TIERS[t].slot.get(src); n++; }
-      else if (t < 0) { const pa = g.parent[i]; if (made[pa] !== epoch && !pending.has(pa)) cand.push([level[pa] * 1e9 + vx * vx + vy * vy, pa]); }  // its parent may lie just out of view
-      if ((made[i] !== epoch || have < need) && !pending.has(i)) cand.push([level[i] * 1e9 + vx * vx + vy * vy, i]);
+      if (have >= 0 && n < MAXI) { const s = TIERS[have].slot.get(i); inst[4 * n] = i; inst[4 * n + 1] = have; inst[4 * n + 2] = s; n++; }
+      if ((made[i] !== epoch || have < need) && !pending.has(i)) cand.push([vx * vx + vy * vy, i]);
     }
-    drawn = n; shown = own; lastInView = inView;
+    drawn = n; lastInView = inView;
     if (n) dev.queue.writeBuffer(instBuf, 0, inst, 0, 4 * n);
     const enc = dev.createCommandEncoder();
     const pass = enc.beginRenderPass({ colorAttachments: [{ view: ctx.getCurrentTexture().createView(), clearValue: [0, 0, 0, 1], loadOp: 'clear', storeOp: 'store' }] });
     if (n) { pass.setPipeline(pipe); pass.setBindGroup(0, bind); pass.draw(18, n); }
     pass.end(); dev.queue.submit([enc.finish()]);
-    cand.sort((a, b) => a[0] - b[0]); want = [...new Set(cand.slice(0, 256).map((c) => c[1]))];  // a parent can come once per child
+    cand.sort((a, b) => a[0] - b[0]); want = cand.slice(0, 256).map((c) => c[1]);
     pump();
     drawLabels(S);
     showStats();
-    window.__globe = { drawn, inView, made: madeN, model: G.model, rot: Rm.slice(), zoom, p: P.slice(), epoch, psi, mini: miniImg.filter(Boolean).length, miniN: mg.n, labels: nLabels, Mm: Mm.slice(), miniFront: Dm.slice(6, 9), noiseCentre: noiseCentre() };
+    window.__globe = { drawn, inView, made: madeN, model: G.model, rot: Rm.slice(), zoom, p: P.slice(), epoch, psi, mini: miniImg.filter(Boolean).length, miniN: mg.n, labels: nLabels, previews: previewsN, remade: remadeN, Mm: Mm.slice(), miniView: Vm.slice(), miniFront: Dm.slice(6, 9), noiseCentre: noiseCentre() };
     requestAnimationFrame(frame);
   }
 
@@ -509,7 +518,7 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
   let lastStats = 0;
   function showStats() {
     const now = performance.now(); if (now - lastStats < 250) return; lastStats = now;
-    let rows = `<div class="head">${fmt(shown)} of ${fmt(inView)} tiles in view made</div><div>${fmt(madeN)} made${held ? ', paused (P to resume)' : ''}</div>`;
+    let rows = `<div class="head">${fmt(drawn)} of ${fmt(inView)} tiles in view shown</div><div>${fmt(madeN)} made${held ? ', paused (P to resume)' : ''}</div>`;
     if (centreCell >= 0) {
       const mix = mixAt(centreCell), top = Object.keys(mix).sort((a, b) => mix[b] - mix[a])[0], d = dirsFor(mix);
       rows += `<div class="cap">Centre: ${G.names[top]}. These 3 noise directions carry ${Math.round(100 * d.share)}% of the variation here${psi !== 1 ? ' (measured at ψ = 1)' : ''}.</div>`;
@@ -581,9 +590,11 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     return [...r0, ...r1, r0[1] * r1[2] - r0[2] * r1[1], r0[2] * r1[0] - r0[0] * r1[2], r0[0] * r1[1] - r0[1] * r1[0]];
   };
   const tr = (A) => [A[0], A[3], A[6], A[1], A[4], A[7], A[2], A[5], A[8]];
-  // The minimap is drawn turned by Dm, which always brings the noise at the main view's centre (Mm^T q, q the field
-  // there) to its front: turning the class globe turns the noise globe under the fixed ring.
-  let Dm = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+  // The minimap is drawn turned by Vm, which only a drag on it changes: it never moves on its own. Underneath, Dm
+  // turns, unseen, so the noise at the main view's centre (Mm^T q, q the field there) is always at the front, under the
+  // ring: the point drawn at s holds the noise Dm^T s. Turning the class globe changes what the minimap's tiles hold,
+  // not where it points.
+  let Dm = [1, 0, 0, 0, 1, 0, 0, 0, 1], Vm = [1, 0, 0, 0, 1, 0, 0, 0, 1];
   const noiseCentre = () => { const q = noisePoint(NF, Rm.slice(6, 9)); return unit([0, 1, 2].map((t) => Mm[t] * q[0] + Mm[3 + t] * q[1] + Mm[6 + t] * q[2])); };
   function faceMini() {  // the smallest turn of Dm that brings noiseCentre() to the front
     const n = noiseCentre(), v = [0, 1, 2].map((a) => Dm[3 * a] * n[0] + Dm[3 * a + 1] * n[1] + Dm[3 * a + 2] * n[2]);
@@ -600,13 +611,13 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     const cy = Math.cos(ax), sy = Math.sin(ax), cx = Math.cos(ay), sx = Math.sin(ay);
     const R = mul([1, 0, 0, 0, cx, -sx, 0, sx, cx], [cy, 0, sy, 0, 1, 0, -sy, 0, cy]);
     // the drawn globe turns by R; the view centre's noise becomes the point now at the front: Mm <- Mm Dm^T R Dm
-    Mm = ortho(mul(Mm, mul(tr(Dm), mul(R, Dm)))); Dm = ortho(mul(R, Dm));
+    Mm = ortho(mul(Mm, mul(tr(Dm), mul(R, Dm)))); Dm = ortho(mul(R, Dm)); Vm = ortho(mul(R, Vm));
     P = Mm.slice(6, 9); remake();
   });
   const mup = () => { mdrag = null; }; mini.addEventListener('pointerup', mup); mini.addEventListener('pointercancel', mup);
   function drawMini() {
     const s = Math.round(mini.clientWidth * dpr); if (mini.width !== s || mini.height !== s) { mini.width = s; mini.height = s; }
-    const r = s / 2 - 2 * dpr; mctx.clearRect(0, 0, s, s); faceMini(); const D = Dm;
+    const r = s / 2 - 2 * dpr; mctx.clearRect(0, 0, s, s); faceMini(); const D = Vm;
     const gr = mctx.createRadialGradient(s / 2 - r / 3, s / 2 - r / 3, r / 10, s / 2, s / 2, r);
     gr.addColorStop(0, '#3a4a66'); gr.addColorStop(1, '#0e1420');
     mctx.fillStyle = gr; mctx.beginPath(); mctx.arc(s / 2, s / 2, r, 0, 2 * Math.PI); mctx.fill();
@@ -647,16 +658,22 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     let m = 0; for (let j = mg.cellStart[i]; j < mg.cellStart[i + 1]; j++) m = Math.max(m, Math.hypot(...[0, 1, 2].map((t) => mg.corners[3 * j + t] - mg.centres[3 * i + t])));
     return m;
   });
+  // A tile drawn at Vm y holds the noise Dm^T Vm y, so its key carries that turn (rounded: a small turn keeps the
+  // tiles). Old tiles stay drawn until replaced, the front first.
+  const miniOf = [];
   setInterval(() => {
-    if (held || miniBusy || switching || G.lost || inflight || want.length || centreCell < 0) return;
-    const mix = mixAt(centreCell), key = [mixKey(mix), psi, noiseSeed, noiseStr, G.model, G.options.half, G.options.gHalf].join('|');
-    if (key !== miniKey) { miniKey = key; miniImg.forEach((b) => b && b.close()); miniImg = []; }
-    const i = [...Array(mg.n).keys()].find((k) => !miniImg[k]); if (i === undefined) return;
+    if (held || miniBusy || switching || G.lost || inflight || inflightP || want.length || centreCell < 0) return;
+    const H = mul(tr(Dm), Vm), mix = mixAt(centreCell);
+    const key = [mixKey(mix), psi, noiseSeed, noiseStr, G.model, G.options.half, G.options.gHalf, H.map((x) => Math.round(x * 20)).join()].join('|');
+    miniKey = key;
+    let i = -1, best = -2;
+    for (let k = 0; k < mg.n; k++) if (miniOf[k] !== key) { const vz = Vm[6] * mg.centres[3 * k] + Vm[7] * mg.centres[3 * k + 1] + Vm[8] * mg.centres[3 * k + 2]; if (vz > best) { best = vz; i = k; } }
+    if (i < 0) return;
     miniBusy = true;
-    const q = [mg.centres[3 * i], mg.centres[3 * i + 1], mg.centres[3 * i + 2]];
+    const y = [mg.centres[3 * i], mg.centres[3 * i + 1], mg.centres[3 * i + 2]], q = [0, 1, 2].map((a) => H[3 * a] * y[0] + H[3 * a + 1] * y[1] + H[3 * a + 2] * y[2]);
     G.generate(tileZ(dirsFor(mix).V, q, psi, Z0), Float32Array.from(G.classVec(mix)), NOISE)
       .then((img) => createImageBitmap(img, { resizeWidth: 64, resizeHeight: 64, resizeQuality: 'high' }))
-      .then((b) => { if (key === miniKey) miniImg[i] = b; else b.close(); })
+      .then((b) => { if (key === miniKey) { if (miniImg[i]) miniImg[i].close(); miniImg[i] = b; miniOf[i] = key; } else b.close(); })
       .catch((e) => console.error(e)).finally(() => { miniBusy = false; });
   }, 50);
   requestAnimationFrame(drawMini);

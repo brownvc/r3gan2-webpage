@@ -12,15 +12,13 @@ export function geodesic(levels) {
     [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9], [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1]];
   const n = 10 * 4 ** levels + 2, V = new Float64Array(3 * n);
   let nv = 0;
-  // parent: for a vertex made at a level, the lower-indexed end of the edge it halves (a vertex one level coarser)
-  const parent = new Uint32Array(n).map((_, i) => i);
   const add = (x, y, z) => { const r = Math.hypot(x, y, z); V[3 * nv] = x / r; V[3 * nv + 1] = y / r; V[3 * nv + 2] = z / r; return nv++; };
   for (const p of P) add(...p);
   for (let l = 0; l < levels; l++) {
     const mid = new Map(), nf = [];
     const m = (a, b) => {
       const k = a < b ? a * n + b : b * n + a; let i = mid.get(k);
-      if (i === undefined) { i = add(V[3 * a] + V[3 * b], V[3 * a + 1] + V[3 * b + 1], V[3 * a + 2] + V[3 * b + 2]); mid.set(k, i); parent[i] = Math.min(a, b); }
+      if (i === undefined) { i = add(V[3 * a] + V[3 * b], V[3 * a + 1] + V[3 * b + 1], V[3 * a + 2] + V[3 * b + 2]); mid.set(k, i); }
       return i;
     };
     for (const [a, b, c] of F) { const ab = m(a, b), bc = m(b, c), ca = m(c, a); nf.push([a, ab, ca], [b, bc, ab], [c, ca, bc], [ab, bc, ca]); }
@@ -51,7 +49,7 @@ export function geodesic(levels) {
     fs.sort((a, b) => ang(a) - ang(b));
     fs.forEach((f, j) => corners.set(cen.subarray(3 * f, 3 * f + 3), 3 * (cellStart[i] + j)));
   }
-  return { n, centres: Float32Array.from(V), cellStart, corners, faces: Uint32Array.from(F.flat()), around, parent };
+  return { n, centres: Float32Array.from(V), cellStart, corners, faces: Uint32Array.from(F.flat()), around };
 }
 
 // The noise field over the globe: where the map blends random anchors in 64 dimensions (nearly orthogonal there, so

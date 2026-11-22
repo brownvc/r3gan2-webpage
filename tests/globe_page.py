@@ -23,13 +23,14 @@ with sync_playwright() as p:
     pg.wait_for_function(f'{G} && {G}.inView > 0 && {G}.drawn >= {G}.inView', timeout=180000)
     s = pg.evaluate(G); check(s['drawn'] >= s['inView'] > 20, f"tiles drawn: {s['drawn']} of {s['inView']} in view")
     box = pg.locator('#globe').bounding_box(); cx, cy = box['x'] + box['width'] / 2, box['y'] + box['height'] / 2
-    r0, f0 = pg.evaluate(f'{G}.rot'), pg.evaluate(f'{G}.miniFront')
+    r0, v0 = pg.evaluate(f'{G}.rot'), pg.evaluate(f'{G}.miniView')
     pg.mouse.move(cx, cy); pg.mouse.down(); pg.mouse.move(cx + 80, cy + 30, steps=8); pg.mouse.up(); pg.wait_for_timeout(200)
     check(pg.evaluate(f'{G}.rot') != r0, 'a drag turns the globe')
     r1 = pg.evaluate(f'{G}.rot'); pg.keyboard.press('ArrowLeft'); pg.wait_for_timeout(300)
     check(pg.evaluate(f'{G}.rot') != r1, 'an arrow key turns the globe')
     f1, nc = pg.evaluate(f'{G}.miniFront'), pg.evaluate(f'{G}.noiseCentre')
-    check(f0 is not None and f1 is not None and max(abs(a - b) for a, b in zip(f0, f1)) > 1e-3, f'turning the class globe turns the noise globe: {f0} -> {f1}')
+    v1 = pg.evaluate(f'{G}.miniView')
+    check(v0 is not None and v0 == v1, f'turning the class globe leaves the noise globe still: {v0} -> {v1}')
     check(nc is not None and max(abs(a - b) for a, b in zip(f1, nc)) < 1e-3, f'the noise globe faces the noise at the view centre: {f1} vs {nc}')
     txt = pg.inner_text('#stats'); check('noise directions carry' in txt and '%' in txt, f'readout: {txt!r}')
     # the noise minimap: spinning it moves p, starts a new epoch, and the tiles in view are made again
@@ -38,6 +39,7 @@ with sync_playwright() as p:
     for k in range(10): pg.mouse.move(mx + 6 * k, my - 3 * k)
     pg.mouse.up()
     s1 = pg.evaluate(G); check(s1['p'] != s0['p'] and s1['epoch'] > s0['epoch'], f"noise point moved {s0['p']} -> {s1['p']}")
+    check(s1['miniView'] != s0['miniView'], 'spinning the noise globe turns it')
     pg.wait_for_timeout(8000); s2 = pg.evaluate(G)
     check(s2['made'] > s1['made'] and s2['epoch'] == s1['epoch'], f"after the spin, {s2['made'] - s1['made']} tiles made for the last point only")
     pg.wait_for_timeout(800)
@@ -67,10 +69,11 @@ with sync_playwright() as p:
         pg.wait_for_function(f"{G}.model === 'm' && {G}.drawn >= 50", timeout=300000)
         check(pg.evaluate(f'{G}.model') == 'm', 'model switch to M: tiles made again')
     else: print('skip  model switch (M not available)')
-    # far out: the globe looks whole within seconds (coarse cells first, the rest drawn from their nearest made
-    # ancestor), it carries class labels, and P stops and restarts the making of tiles
+    # far out, as on the map: each cell's latent preview first, nearest the centre first, then its decode; a still
+    # view never makes a cell twice. It carries class labels, and P stops and restarts the making of tiles.
     pg.goto(URL + '&zoom=900', wait_until='load'); pg.wait_for_function(f'{G} && {G}.inView > 5000', timeout=180000); pg.wait_for_timeout(20000)
-    s = pg.evaluate(G); check(s['drawn'] >= 0.97 * s['inView'], f"far out, the globe is filled: {s['drawn']} of {s['inView']} cells drawn, {s['made']} made")
+    s = pg.evaluate(G); check(s['previews'] > s['made'] > 0, f"far out, previews come first: {s['previews']} previews, {s['made']} decoded, {s['drawn']} of {s['inView']} shown")
+    check(s['remade'] == 0, f"far out, a still view makes no cell twice: {s['remade']} remade")
     check(s['labels'] >= 10, f"far out, labels: {s['labels']}")
     pg.keyboard.press('p'); pg.wait_for_timeout(1500); m0 = pg.evaluate(f'{G}.made'); pg.wait_for_timeout(2500); m1 = pg.evaluate(f'{G}.made')
     check(m1 == m0, f'P pauses: {m0} -> {m1} made')
