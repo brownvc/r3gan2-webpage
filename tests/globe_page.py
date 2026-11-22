@@ -67,6 +67,14 @@ with sync_playwright() as p:
         pg.wait_for_function(f"{G}.model === 'm' && {G}.drawn >= 50", timeout=300000)
         check(pg.evaluate(f'{G}.model') == 'm', 'model switch to M: tiles made again')
     else: print('skip  model switch (M not available)')
+    # far out: the globe looks whole within seconds (coarse cells first, the rest drawn from their nearest made
+    # ancestor), it carries class labels, and P stops and restarts the making of tiles
+    pg.goto(URL + '&zoom=900', wait_until='load'); pg.wait_for_function(f'{G} && {G}.inView > 5000', timeout=180000); pg.wait_for_timeout(20000)
+    s = pg.evaluate(G); check(s['drawn'] >= 0.97 * s['inView'], f"far out, the globe is filled: {s['drawn']} of {s['inView']} cells drawn, {s['made']} made")
+    check(s['labels'] >= 10, f"far out, labels: {s['labels']}")
+    pg.keyboard.press('p'); pg.wait_for_timeout(1500); m0 = pg.evaluate(f'{G}.made'); pg.wait_for_timeout(2500); m1 = pg.evaluate(f'{G}.made')
+    check(m1 == m0, f'P pauses: {m0} -> {m1} made')
+    pg.keyboard.press('p'); pg.wait_for_timeout(2500); check(pg.evaluate(f'{G}.made') > m1, 'P again resumes')
     # loading: a data folder given without its trailing slash, and no data parameter (the files next to the page)
     base = URL.split('globe.html')[0]
     for u in (base + 'globe.html?data=.', base + 'globe.html'):

@@ -124,6 +124,7 @@
         <tr><th>Turn</th><td>Drag, or the arrow keys</td></tr>
         <tr><th>Zoom</th><td>Scroll or pinch</td></tr>
         <tr><th>Noise</th><td>Spin the small globe</td></tr>
+        <tr><th>Pause</th><td>P</td></tr>
       </table>
       <p class="note" id="cfgnote"></p>
     </section>
@@ -175,7 +176,7 @@
 
 <script type="module">
 import { createLab, MODELS, weightsFile, fileExists, savedInBrowser, gauss, Z, fmt, SMALL_DEVICE } from './lab.js?v=20261121a';
-import { geodesic, classMix, directions, tileZ, noiseField, noisePoint, tierFor } from './globe.js?v=20261122c';
+import { geodesic, classMix, directions, tileZ, noiseField, noisePoint, tierFor } from './globe.js?v=20261122d';
 const $ = (id) => document.getElementById(id);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 // Left out, as on the map: clothing classes whose training photos are mostly people in swimwear or underwear.
@@ -262,11 +263,11 @@ async function main() {
   const mixAt = (i) => (mixCache[i] ??= classMix(GF.points, centre(i), soft, blocked));
   // Each tile's noise point: the smooth random field at its place on the globe (as the map's anchors vary its z),
   // turned by the noise minimap's rotation, so spinning the minimap moves every tile's noise together.
-  let NF = noiseField(noiseSeed), qCache = new Array(N);
+  let NF = noiseField(noiseSeed), qCache = new Array(N), Z0 = gauss(Z, noiseSeed + 1000003);  // Z0: the seed's typical z
   function tileInputs(i) {
     const mix = mixAt(i), q = (qCache[i] ??= noisePoint(NF, centre(i)));
     const qq = [0, 1, 2].map((t) => Mm[t] * q[0] + Mm[3 + t] * q[1] + Mm[6 + t] * q[2]);  // Mm^T q
-    return { z: tileZ(dirsFor(mix).V, qq, psi), mix };
+    return { z: tileZ(dirsFor(mix).V, qq, psi, Z0), mix };
   }
 
   // ---- tile images: GPU texture arrays at 16, 64 and 256 px. Every tile made keeps a 16 px copy; 64 and 256 px keep
@@ -402,16 +403,17 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     if (e.key === 'ArrowLeft') turn(-a, 0); else if (e.key === 'ArrowRight') turn(a, 0);
     else if (e.key === 'ArrowUp') turn(0, -a); else if (e.key === 'ArrowDown') turn(0, a);
     else if (e.key === 'h' || e.key === 'H') setRail(!railOpen);
+    else if (e.key === 'p' || e.key === 'P') { held = !held; lastStats = 0; pump(); }  // pause: no new tiles, as on the map
     else return;
     e.preventDefault();
   });
 
   // ---- generation: the tiles in view that lack an image for this epoch (or a large enough one), nearest the centre
   // first, as many in flight as the lab has slots ----
-  let inflight = 0, madeN = 0, want = [], switching = false, fails = 0;
+  let inflight = 0, madeN = 0, want = [], switching = false, fails = 0, held = false;
   const pending = new Set();
   function pump() {
-    if (switching || G.lost || document.hidden) return;
+    if (held || switching || G.lost || document.hidden) return;
     while (inflight < G.slots && want.length) {
       const cell = want.shift(); if (pending.has(cell)) continue;
       pending.add(cell); inflight++;
@@ -425,11 +427,12 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
   function remake() { epoch++; want = []; }  // new inputs: every tile is made again; old images show until replaced
 
   // ---- the frame ----
-  const inst = new Uint32Array(MAXI * 4), CAPS = TIERS.map((T, t) => (t ? T.cap : Infinity)); let drawn = 0, inView = 0, lastInView = 0, centreCell = -1;
+  const inst = new Uint32Array(MAXI * 4), CAPS = TIERS.map((T, t) => (t ? T.cap : Infinity)); let drawn = 0, shown = 0, inView = 0, lastInView = 0, centreCell = -1;
+  const level = new Uint8Array(N).map((_, i) => { let k = 0; while (i >= 10 * 4 ** k + 2) k++; return k; });  // the cell's tiling level
   function frame() {
     const S = zoom * dpr, sx = 2 * S / W, sy = 2 * S / H;
     dev.queue.writeBuffer(uniBuf, 0, new Float32Array([...Rm.slice(0, 3), 0, ...Rm.slice(3, 6), 0, ...Rm.slice(6, 9), 0, sx, sy, SIDE, 0]));
-    const cand = []; let n = 0, best = -2; inView = 0;
+    const cand = []; let n = 0, own = 0, best = -2; inView = 0;
     const hw = W / 2, hh = H / 2;
     for (let i = 0; i < N; i++) {
       const x = g.centres[3 * i], y = g.centres[3 * i + 1], zc = g.centres[3 * i + 2];
@@ -440,38 +443,63 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
       if (vz > best) { best = vz; centreCell = i; }  // the point facing the viewer
       const cellPx = 2 * rp, need = tierFor(cellPx, lastInView, CAPS);
       const have = T256.slot.has(i) && need >= 2 ? 2 : T64.slot.has(i) && need >= 1 ? 1 : T16.slot.has(i) ? 0 : -1;
-      if (have >= 0 && n < MAXI) { const s = TIERS[have].slot.get(i); inst[4 * n] = i; inst[4 * n + 1] = have; inst[4 * n + 2] = s; n++; }
-      if ((made[i] !== epoch || have < need) && !pending.has(i)) cand.push([vx * vx + vy * vy, i]);
+      if (have >= 0) own++;
+      // a cell with no image yet shows its nearest made ancestor's (coarse cells are made first), so the view is whole
+      let src = i, t = have; if (t < 0) { while (!T16.slot.has(src) && g.parent[src] !== src) src = g.parent[src]; t = T16.slot.has(src) ? 0 : -1; }
+      if (t >= 0 && n < MAXI) { inst[4 * n] = i; inst[4 * n + 1] = t; inst[4 * n + 2] = TIERS[t].slot.get(src); n++; }
+      else if (t < 0) { const pa = g.parent[i]; if (made[pa] !== epoch && !pending.has(pa)) cand.push([level[pa] * 1e9 + vx * vx + vy * vy, pa]); }  // its parent may lie just out of view
+      if ((made[i] !== epoch || have < need) && !pending.has(i)) cand.push([level[i] * 1e9 + vx * vx + vy * vy, i]);
     }
-    drawn = n; lastInView = inView;
+    drawn = n; shown = own; lastInView = inView;
     if (n) dev.queue.writeBuffer(instBuf, 0, inst, 0, 4 * n);
     const enc = dev.createCommandEncoder();
     const pass = enc.beginRenderPass({ colorAttachments: [{ view: ctx.getCurrentTexture().createView(), clearValue: [0, 0, 0, 1], loadOp: 'clear', storeOp: 'store' }] });
     if (n) { pass.setPipeline(pipe); pass.setBindGroup(0, bind); pass.draw(18, n); }
     pass.end(); dev.queue.submit([enc.finish()]);
-    cand.sort((a, b) => a[0] - b[0]); want = cand.slice(0, 256).map((c) => c[1]);
+    cand.sort((a, b) => a[0] - b[0]); want = [...new Set(cand.slice(0, 256).map((c) => c[1]))];  // a parent can come once per child
     pump();
     drawLabels(S);
     showStats();
-    window.__globe = { drawn, inView, made: madeN, model: G.model, rot: Rm.slice(), zoom, p: P.slice(), epoch, psi, mini: miniImg.filter(Boolean).length, miniN: mg.n, Mm: Mm.slice(), miniFront: Dm.slice(6, 9), noiseCentre: noiseCentre() };
+    window.__globe = { drawn, inView, made: madeN, model: G.model, rot: Rm.slice(), zoom, p: P.slice(), epoch, psi, mini: miniImg.filter(Boolean).length, miniN: mg.n, labels: nLabels, Mm: Mm.slice(), miniFront: Dm.slice(6, 9), noiseCentre: noiseCentre() };
     requestAnimationFrame(frame);
   }
 
-  // Class names: at the class's point, once regions are large enough on screen to hold them.
+  // Over the tiles: the globe's edge, a grid fixed to the globe (strongest far out, where it shows the sphere), and
+  // class names at their points, nearest the view's centre first, each only where it overlaps no other.
+  let nLabels = 0;
   function drawLabels(S) {
     lctx.clearRect(0, 0, W, H);
-    lctx.strokeStyle = 'rgba(255,255,255,0.25)'; lctx.lineWidth = dpr;  // the globe's edge, before its tiles are made
+    lctx.strokeStyle = 'rgba(255,255,255,0.25)'; lctx.lineWidth = dpr;
     lctx.beginPath(); lctx.arc(W / 2, H / 2, S, 0, 2 * Math.PI); lctx.stroke();
-    if (SPACING * S < 120 * dpr) return;
+    const tilePx = 2 * meanRad * S;
+    lctx.strokeStyle = `rgba(255,255,255,${0.08 + 0.22 * clamp((60 * dpr - tilePx) / (50 * dpr), 0, 1)})`;
+    const line = (f) => { lctx.beginPath(); let on = false;
+      for (let t = 0; t <= 360; t++) { const p = f(2 * Math.PI * t / 360), vz = Rm[6] * p[0] + Rm[7] * p[1] + Rm[8] * p[2];
+        const x = W / 2 + S * (Rm[0] * p[0] + Rm[1] * p[1] + Rm[2] * p[2]), y = H / 2 - S * (Rm[3] * p[0] + Rm[4] * p[1] + Rm[5] * p[2]);
+        if (vz > 0) { if (on) lctx.lineTo(x, y); else lctx.moveTo(x, y); on = true; } else on = false; }
+      lctx.stroke(); };
+    for (let k = 1; k < 6; k++) { const la = Math.PI * (k / 6 - 0.5); line((t) => [Math.cos(la) * Math.cos(t), Math.sin(la), Math.cos(la) * Math.sin(t)]); }
+    for (let k = 0; k < 6; k++) { const lo = Math.PI * k / 6; line((t) => [Math.cos(t) * Math.cos(lo), Math.sin(t), Math.cos(t) * Math.sin(lo)]); }
     lctx.font = `600 ${13 * dpr}px system-ui, sans-serif`; lctx.textAlign = 'center'; lctx.textBaseline = 'middle';
-    const pts = GF.points;
+    const pts = GF.points, cand = [], boxes = [], wr = wrap.getBoundingClientRect(); nLabels = 0;
+    for (const id of ['stats', 'minicap', 'mini', 'rail', 'railtab']) {  // no label under the overlays
+      const e = $(id); if (e.hidden || !e.offsetWidth) continue; const r = e.getBoundingClientRect();
+      boxes.push([(r.left - wr.left) * dpr, (r.top - wr.top) * dpr, (r.right - wr.left) * dpr, (r.bottom - wr.top) * dpr]);
+    }
     for (let c = 0; c < 1000; c++) {
       if (blocked.has(c)) continue;
       const x = pts[3 * c], y = pts[3 * c + 1], zc = pts[3 * c + 2];
       const vz = Rm[6] * x + Rm[7] * y + Rm[8] * zc; if (vz < 0.3) continue;
       const px = W / 2 + (Rm[0] * x + Rm[1] * y + Rm[2] * zc) * S, py = H / 2 - (Rm[3] * x + Rm[4] * y + Rm[5] * zc) * S;
       if (px < 0 || px > W || py < 0 || py > H) continue;
-      const t = G.names[c], tw = lctx.measureText(t).width + 14 * dpr, th = 20 * dpr;
+      cand.push([(px - W / 2) ** 2 + (py - H / 2) ** 2, c, px, py]);
+    }
+    cand.sort((a, b) => a[0] - b[0]);
+    const gap = 6 * dpr, th = 20 * dpr;
+    for (const [, c, px, py] of cand) {
+      const t = G.names[c], tw = lctx.measureText(t).width + 14 * dpr, b = [px - tw / 2 - gap, py - th / 2 - gap, px + tw / 2 + gap, py + th / 2 + gap];
+      if (b[0] < 0 || b[1] < 0 || b[2] > W || b[3] > H || boxes.some((o) => b[0] < o[2] && o[0] < b[2] && b[1] < o[3] && o[1] < b[3])) continue;
+      boxes.push(b); nLabels++;
       lctx.fillStyle = 'rgba(33,37,41,0.78)'; lctx.beginPath(); lctx.roundRect(px - tw / 2, py - th / 2, tw, th, th / 2); lctx.fill();
       lctx.fillStyle = '#fff'; lctx.fillText(t, px, py + 0.5 * dpr);
     }
@@ -481,7 +509,7 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
   let lastStats = 0;
   function showStats() {
     const now = performance.now(); if (now - lastStats < 250) return; lastStats = now;
-    let rows = `<div class="head">${fmt(drawn)} of ${fmt(inView)} tiles in view shown</div><div>${fmt(madeN)} made</div>`;
+    let rows = `<div class="head">${fmt(shown)} of ${fmt(inView)} tiles in view made</div><div>${fmt(madeN)} made${held ? ', paused (P to resume)' : ''}</div>`;
     if (centreCell >= 0) {
       const mix = mixAt(centreCell), top = Object.keys(mix).sort((a, b) => mix[b] - mix[a])[0], d = dirsFor(mix);
       rows += `<div class="cap">Centre: ${G.names[top]}. These 3 noise directions carry ${Math.round(100 * d.share)}% of the variation here${psi !== 1 ? ' (measured at ψ = 1)' : ''}.</div>`;
@@ -530,7 +558,7 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
   $('trunc').oninput = () => { psi = +$('trunc').value; remake(); showConfig(); };
   $('soft').oninput = () => { soft = +$('soft').value; mixCache = new Array(N); remake(); showConfig(); };
   $('nstr').oninput = () => { noiseStr = +$('nstr').value; NOISE = makeNoise(); remake(); showConfig(); };
-  const newField = () => { NF = noiseField(noiseSeed); qCache = new Array(N); };
+  const newField = () => { NF = noiseField(noiseSeed); qCache = new Array(N); Z0 = gauss(Z, noiseSeed + 1000003); };
   $('nseed').onchange = () => { noiseSeed = clamp(Math.round(+$('nseed').value) || 0, 0, 999999); NOISE = makeNoise(); newField(); remake(); showConfig(); };
   $('newn').onclick = () => { noiseSeed = randSeed(); NOISE = makeNoise(); newField(); remake(); showConfig(); };
   for (const c of Object.keys(MODELS)) {
@@ -577,7 +605,7 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
   });
   const mup = () => { mdrag = null; }; mini.addEventListener('pointerup', mup); mini.addEventListener('pointercancel', mup);
   function drawMini() {
-    const s = mini.clientWidth * dpr; if (mini.width !== s) { mini.width = mini.height = s; }
+    const s = Math.round(mini.clientWidth * dpr); if (mini.width !== s || mini.height !== s) { mini.width = s; mini.height = s; }
     const r = s / 2 - 2 * dpr; mctx.clearRect(0, 0, s, s); faceMini(); const D = Dm;
     const gr = mctx.createRadialGradient(s / 2 - r / 3, s / 2 - r / 3, r / 10, s / 2, s / 2, r);
     gr.addColorStop(0, '#3a4a66'); gr.addColorStop(1, '#0e1420');
@@ -620,13 +648,13 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     return m;
   });
   setInterval(() => {
-    if (miniBusy || switching || G.lost || inflight || want.length || centreCell < 0) return;
+    if (held || miniBusy || switching || G.lost || inflight || want.length || centreCell < 0) return;
     const mix = mixAt(centreCell), key = [mixKey(mix), psi, noiseSeed, noiseStr, G.model, G.options.half, G.options.gHalf].join('|');
     if (key !== miniKey) { miniKey = key; miniImg.forEach((b) => b && b.close()); miniImg = []; }
     const i = [...Array(mg.n).keys()].find((k) => !miniImg[k]); if (i === undefined) return;
     miniBusy = true;
     const q = [mg.centres[3 * i], mg.centres[3 * i + 1], mg.centres[3 * i + 2]];
-    G.generate(tileZ(dirsFor(mix).V, q, psi), Float32Array.from(G.classVec(mix)), NOISE)
+    G.generate(tileZ(dirsFor(mix).V, q, psi, Z0), Float32Array.from(G.classVec(mix)), NOISE)
       .then((img) => createImageBitmap(img, { resizeWidth: 64, resizeHeight: 64, resizeQuality: 'high' }))
       .then((b) => { if (key === miniKey) miniImg[i] = b; else b.close(); })
       .catch((e) => console.error(e)).finally(() => { miniBusy = false; });

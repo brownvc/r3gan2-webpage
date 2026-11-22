@@ -112,10 +112,23 @@ const tests = {
     assert.ok(deg(a4[a4.length >> 1]) > 35, `over 4 tiles the median turn is only ${deg(a4[a4.length >> 1])} degrees`);
     assert.ok(norm(mean) < 0.3, `noise points bunched: mean resultant ${norm(mean)}`);
   },
-  tileZ() {
+  tileZ() {  // a typical sample: the seed's z, except along the 3 directions, where it is the noise point at length sqrt 3
     const { V } = directions({ 0: 1 }, synthAxes(4), E3), p = unit([0.3, -0.5, 0.8]);
-    assert.ok(tileZ(V, p, 0).every((x) => x === 0));
-    assert.ok(Math.abs(norm(Array.from(tileZ(V, p, 1))) - 8) < 1e-4);
+    const z0 = Float32Array.from({ length: 64 }, (_, t) => Math.sin(7 * t + 1) * 1.4);
+    assert.ok(tileZ(V, p, 0, z0).every((x) => x === 0));
+    const z = Array.from(tileZ(V, p, 1, z0));
+    for (let a = 0; a < 3; a++) assert.ok(Math.abs(dot(z, row(V, a)) - Math.sqrt(3) * p[a]) < 1e-5, `along direction ${a}: ${dot(z, row(V, a))}`);
+    const rest = (v) => { const o = v.slice(); for (let a = 0; a < 3; a++) { const d = dot(v, row(V, a)); for (let t = 0; t < 64; t++) o[t] -= d * V[a * 64 + t]; } return o; };
+    assert.ok(Math.max(...rest(z).map((x, t) => Math.abs(x - rest(Array.from(z0))[t]))) < 1e-5, 'elsewhere z is the seed’s');
+  },
+  parents() {  // every finer vertex has a parent in a coarser level, about one of its own spacings away
+    const levelOf = (i) => { let k = 0; while (i >= 10 * 4 ** k + 2) k++; return k; };
+    for (let i = 12; i < g.n; i += 13) {
+      const k = levelOf(i), j = g.parent[i];
+      assert.ok(levelOf(j) < k, `vertex ${i} (level ${k}): parent ${j} is not coarser`);
+      const ang = Math.acos(Math.min(1, dot(vec(g.centres, i), vec(g.centres, j))));
+      assert.ok(ang < 1.5 * Math.sqrt(4 * Math.PI / (10 * 4 ** k + 2)), `vertex ${i}: parent ${ang} rad away`);
+    }
   },
 };
 let failed = 0;
