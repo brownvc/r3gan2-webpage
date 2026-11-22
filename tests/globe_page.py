@@ -28,6 +28,8 @@ with sync_playwright() as p:
     check(pg.evaluate(f'{G}.rot') != r0, 'a drag turns the globe')
     r1 = pg.evaluate(f'{G}.rot'); pg.keyboard.press('ArrowLeft'); pg.wait_for_timeout(100)
     check(pg.evaluate(f'{G}.rot') != r1, 'an arrow key turns the globe')
+    mk, qc = pg.evaluate(f'{G}.marker'), pg.evaluate(f'{G}.qCentre')
+    check(mk is not None and qc is not None and abs(mk[0] - qc[0]) < 1e-6 and abs(mk[1] - qc[1]) < 1e-6, f'the minimap marker sits at the centre tile’s noise point: {mk} vs {qc}')
     txt = pg.inner_text('#stats'); check('noise directions carry' in txt and '%' in txt, f'readout: {txt!r}')
     # the noise minimap: spinning it moves p, starts a new epoch, and the tiles in view are made again
     s0 = pg.evaluate(G); mb = pg.locator('#mini').bounding_box(); mx, my = mb['x'] + mb['width'] / 2, mb['y'] + mb['height'] / 2
@@ -44,6 +46,7 @@ with sync_playwright() as p:
     pg2 = c.new_page(); pg2.on('pageerror', lambda e: errors.append(str(e))); pg2.goto(url, wait_until='load')
     pg2.wait_for_function(f'{G} && {G}.drawn >= 50', timeout=180000)
     check(max(abs(a - b) for a, b in zip(pg2.evaluate(f'{G}.p'), s2['p'])) < 1e-3, 'a reload of the link restores p')
+    m2 = pg.evaluate(f'{G}.Mm'); check(m2 is not None and max(abs(a - b) for a, b in zip(pg2.evaluate(f'{G}.Mm') or [9] * 9, m2)) < 1e-3, 'a reload restores the whole minimap rotation (every tile’s noise)')
     pg2.close()
     # psi = 0: every tile is its class centre, z = 0
     pg.goto(URL + '&psi=0', wait_until='load'); pg.wait_for_function(f'{G} && {G}.drawn >= 50', timeout=180000)

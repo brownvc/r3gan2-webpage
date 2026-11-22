@@ -1,6 +1,6 @@
 // Tests for globe.js (the class globe: tiling, class field, noise directions). Run: node tests/globe_test.mjs
 import assert from 'node:assert/strict';
-import { geodesic, cellAt, classMix, directions, tileZ, noiseField, noisePoint } from '../globe.js';
+import { geodesic, cellAt, classMix, directions, tileZ, noiseField, noisePoint, tierFor } from '../globe.js';
 
 const dot = (a, b) => a.reduce((s, x, i) => s + x * b[i], 0);
 const norm = (a) => Math.sqrt(dot(a, a));
@@ -69,9 +69,26 @@ const tests = {
     R0[0] = s; R0[1] = s; R0[64] = -s; R0[65] = s; R0[130] = 1;  // a rotation of e1, e2, e3 (det +1)
     const { V } = directions({ 0: 1 }, synthAxes(4), R0);
     for (let a = 0; a < 3; a++) assert.ok(dot(row(V, a), row(R0, a)) > 0.999, `row ${a} not aligned`);
-    const M = [0, 1, 2].map((a) => [0, 1, 2].map((b) => dot(row(V, a), row(R0, b))));
-    const det = M[0][0] * (M[1][1] * M[2][2] - M[1][2] * M[2][1]) - M[0][1] * (M[1][0] * M[2][2] - M[1][2] * M[2][0]) + M[0][2] * (M[1][0] * M[2][1] - M[1][1] * M[2][0]);
-    assert.ok(det > 0, 'mirrored');
+  },
+  directionsIgnoreSigns() {  // an eigenvector's sign is arbitrary: flipping a stored one must not change V
+    let s = 7; const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647) - 0.5;
+    for (let trial = 0; trial < 50; trial++) {
+      const ax = { trace: new Float32Array(2).fill(40), lambda: Float32Array.from({ length: 16 }, (_, j) => 8 - (j % 8)), U: new Float32Array(2 * 512) };
+      for (let r = 0; r < 16; r++) { const v = unit(Array.from({ length: 64 }, rnd)); ax.U.set(v, r * 64); }
+      const R0 = new Float32Array(192); for (let a = 0; a < 3; a++) R0.set(unit(Array.from({ length: 64 }, rnd)), a * 64);
+      const mix = { 0: 0.6, 1: 0.4 }, A = directions(mix, ax, R0).V;
+      const flipped = { ...ax, U: Float32Array.from(ax.U) }; for (let t = 0; t < 64; t++) flipped.U[trial % 16 * 64 + t] *= -1;
+      const B = directions(mix, flipped, R0).V;
+      const d = Math.max(...A.map((x, i) => Math.abs(x - B[i])));
+      assert.ok(d < 1e-4, `trial ${trial}: V changed by ${d} when one stored eigenvector's sign flipped`);
+    }
+  },
+  tierFor() {  // a resolution tier is used only while the cells in view fit in it, or tiles would be remade forever
+    assert.equal(tierFor(150, 300, [Infinity, 8192, 512]), 2);
+    assert.equal(tierFor(150, 1100, [Infinity, 8192, 512]), 1);
+    assert.equal(tierFor(150, 9000, [Infinity, 8192, 512]), 0);
+    assert.equal(tierFor(50, 300, [Infinity, 8192, 512]), 1);
+    assert.equal(tierFor(10, 300, [Infinity, 8192, 512]), 0);
   },
   directionsThreeClasses() {
     const { V, share } = directions({ 0: 0.5, 1: 0.3, 2: 0.2 }, synthAxes(4), E3);

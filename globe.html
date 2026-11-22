@@ -35,7 +35,8 @@
   #stats:empty { display: none; }
   #stats .head { color: #fff; font-weight: 600; }
   #stats .cap { margin-top: 6px; font-size: 12.5px; color: rgba(255, 255, 255, 0.6); }
-  /* The noise minimap: a small globe of noise; the point facing you is the noise every tile uses. */
+  /* The noise minimap: a small globe of noise, turning every tile's noise point with it; the ring marks the noise of
+     the tile at the centre of the view. */
   #mini { position: absolute; left: 12px; bottom: 12px; width: 200px; height: 200px; border-radius: 50%; background: transparent;
     cursor: grab; touch-action: none; }
   #minicap { position: absolute; left: 12px; bottom: 218px; padding: 1px 8px; border-radius: 4px; font-size: 12.5px;
@@ -174,7 +175,7 @@
 
 <script type="module">
 import { createLab, MODELS, weightsFile, fileExists, savedInBrowser, gauss, Z, fmt, DATA, SMALL_DEVICE } from './lab.js?v=20261121a';
-import { geodesic, classMix, directions, tileZ, noiseField, noisePoint } from './globe.js?v=20261122b';
+import { geodesic, classMix, directions, tileZ, noiseField, noisePoint, tierFor } from './globe.js?v=20261122c';
 const $ = (id) => document.getElementById(id);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 // Left out, as on the map: clothing classes whose training photos are mostly people in swimwear or underwear.
@@ -268,7 +269,8 @@ async function main() {
   }
 
   // ---- tile images: GPU texture arrays at 16, 64 and 256 px. Every tile made keeps a 16 px copy; 64 and 256 px keep
-  // the most recently made (LRU). A cell draws from the largest it has that its size on screen needs. ----
+  // the most recently made (the oldest made is replaced first). A cell draws from the largest it has that its size on
+  // screen needs, and only a tier that holds every cell in view (tierFor), or tiles in view would be remade forever. ----
   const SIDE = 2048;
   function tier(px, layers) {
     const per = SIDE / px, cap = per * per * layers;
@@ -422,7 +424,7 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
   function remake() { epoch++; want = []; }  // new inputs: every tile is made again; old images show until replaced
 
   // ---- the frame ----
-  const inst = new Uint32Array(MAXI * 4); let drawn = 0, inView = 0, centreCell = -1;
+  const inst = new Uint32Array(MAXI * 4), CAPS = TIERS.map((T, t) => (t ? T.cap : Infinity)); let drawn = 0, inView = 0, lastInView = 0, centreCell = -1;
   function frame() {
     const S = zoom * dpr, sx = 2 * S / W, sy = 2 * S / H;
     dev.queue.writeBuffer(uniBuf, 0, new Float32Array([...Rm.slice(0, 3), 0, ...Rm.slice(3, 6), 0, ...Rm.slice(6, 9), 0, sx, sy, SIDE, 0]));
@@ -435,12 +437,12 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
       if (Math.abs(vx) > hw + rp || Math.abs(vy) > hh + rp) continue;
       inView++;
       if (vz > best) { best = vz; centreCell = i; }  // the point facing the viewer
-      const cellPx = 2 * rp, need = cellPx > 100 ? 2 : cellPx > 24 ? 1 : 0;
+      const cellPx = 2 * rp, need = tierFor(cellPx, lastInView, CAPS);
       const have = T256.slot.has(i) && need >= 2 ? 2 : T64.slot.has(i) && need >= 1 ? 1 : T16.slot.has(i) ? 0 : -1;
       if (have >= 0 && n < MAXI) { const s = TIERS[have].slot.get(i); inst[4 * n] = i; inst[4 * n + 1] = have; inst[4 * n + 2] = s; n++; }
       if ((made[i] !== epoch || have < need) && !pending.has(i)) cand.push([vx * vx + vy * vy, i]);
     }
-    drawn = n;
+    drawn = n; lastInView = inView;
     if (n) dev.queue.writeBuffer(instBuf, 0, inst, 0, 4 * n);
     const enc = dev.createCommandEncoder();
     const pass = enc.beginRenderPass({ colorAttachments: [{ view: ctx.getCurrentTexture().createView(), clearValue: [0, 0, 0, 1], loadOp: 'clear', storeOp: 'store' }] });
@@ -450,7 +452,8 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     pump();
     drawLabels(S);
     showStats();
-    window.__globe = { drawn, inView, made: madeN, model: G.model, rot: Rm.slice(), zoom, p: P.slice(), epoch, psi, mini: miniImg.filter(Boolean).length };
+    const qC = centreCell >= 0 ? (qCache[centreCell] ??= noisePoint(NF, centre(centreCell))) : null;
+    window.__globe = { drawn, inView, made: madeN, model: G.model, rot: Rm.slice(), zoom, p: P.slice(), epoch, psi, mini: miniImg.filter(Boolean).length, Mm: Mm.slice(), qCentre: qC, marker: qC && [qC[0], qC[1]] };
     requestAnimationFrame(frame);
   }
 
@@ -504,7 +507,7 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     const q = new URLSearchParams(location.search), r = (x) => +x.toFixed(4);
     q.set('m', G.model); q.set('n', noiseSeed); q.set('ns', noiseStr); q.set('soft', soft);
     if (psi !== 1) q.set('psi', psi); else q.delete('psi');
-    q.set('rot', Rm.map(r).join(',')); q.set('zoom', Math.round(zoom)); q.set('p', P.map(r).join(','));
+    q.set('rot', Rm.map(r).join(',')); q.set('zoom', Math.round(zoom)); q.set('p', P.map(r).join(',')); q.set('nm', Mm.map(r).join(','));
     q.set('h16', G.options.half ? 1 : 0); q.set('g16', G.options.gHalf ? 1 : 0);
     history.replaceState(null, '', `${location.pathname}?${q}`);
   }
@@ -539,7 +542,12 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
   // ---- the noise globe (minimap) ----
   const mini = $('mini'), mctx = mini.getContext('2d');
   let Mm = [1, 0, 0, 0, 1, 0, 0, 0, 1];  // its rotation; P is the point facing the viewer: Mm's third row
-  if (Q.has('p')) Mm = facing(P);
+  // The link carries the whole rotation (nm): P alone leaves its turn about P open, and every tile's noise depends on it.
+  const nm = Q.has('nm') ? Q.get('nm').split(',').map(Number) : [];
+  if (nm.length === 9 && nm.every(Number.isFinite)) {
+    const r0 = unit(nm.slice(0, 3)), r1u = nm.slice(3, 6), d = r1u.reduce((s, x, i) => s + x * r0[i], 0), r1 = unit(r1u.map((x, i) => x - d * r0[i]));
+    Mm = [...r0, ...r1, r0[1] * r1[2] - r0[2] * r1[1], r0[2] * r1[0] - r0[0] * r1[2], r0[0] * r1[1] - r0[1] * r1[0]]; P = Mm.slice(6, 9);
+  } else if (Q.has('p')) Mm = facing(P);
   let mdrag = null;
   mini.addEventListener('pointerdown', (e) => { mini.setPointerCapture(e.pointerId); mdrag = [e.clientX, e.clientY]; });
   mini.addEventListener('pointermove', (e) => {
@@ -577,7 +585,10 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     order.sort((a, b) => a[0] - b[0]);
     for (const [vz, x, y, i] of order) { const h = 0.2 * r * Math.sqrt(vz); mctx.globalAlpha = 0.35 + 0.65 * vz; mctx.drawImage(miniImg[i], x - h / 2, y - h / 2, h, h); }
     mctx.globalAlpha = 1;
-    mctx.strokeStyle = '#E8B04A'; mctx.lineWidth = 2 * dpr; mctx.beginPath(); mctx.arc(s / 2, s / 2, 6 * dpr, 0, 2 * Math.PI); mctx.stroke();
+    // the ring: the centre tile's noise point. Its noise is Mm^T q, which the minimap (drawn turned by Mm) shows at q.
+    const qc = centreCell >= 0 ? (qCache[centreCell] ??= noisePoint(NF, centre(centreCell))) : [0, 0, 1];
+    mctx.strokeStyle = '#E8B04A'; mctx.lineWidth = 2 * dpr; mctx.setLineDash(qc[2] < 0 ? [3 * dpr, 3 * dpr] : []);  // dashed: on the far side
+    mctx.beginPath(); mctx.arc(s / 2 + r * qc[0], s / 2 - r * qc[1], 6 * dpr, 0, 2 * Math.PI); mctx.stroke(); mctx.setLineDash([]);
     requestAnimationFrame(drawMini);
   }
   // The minimap's tiles are made only when the main globe has nothing to do: they differ little from each other, so they

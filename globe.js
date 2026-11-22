@@ -133,8 +133,10 @@ function jacobi(A, n) {
 // The three strongest noise directions of a class mix, as 3 rows of 64 (Float32Array(192)), and the share of the
 // output's variation they carry. The mix's metric is M = sum_k w_k U_k diag(lambda_k) U_k^T over the stored top-8
 // factors, so M = B^T B with B's rows sqrt(w_k lambda_kj) u_kj; its top eigenvectors come from the small Gram matrix
-// B B^T. They are then turned by the rotation (det +1) that brings them closest to the reference basis R0, so the
-// orientation depends on the mix alone, never on how the view got there.
+// B B^T. They are then turned by the orthogonal map that brings them closest to the reference basis R0 (the polar
+// factor; mirroring allowed: the orientation of the subspace means nothing, and allowing it makes the result
+// independent of the eigenvectors' arbitrary signs), so the orientation depends on the mix alone, never on how the
+// view got there or on signs, and neighbouring blends do not jump.
 export function directions(mix, axes, R0) {
   const Z = 64, rows = [];
   let tr = 0;
@@ -153,7 +155,7 @@ export function directions(mix, axes, R0) {
     const f = 1 / Math.sqrt(Math.max(l, 1e-30));
     for (let j = 0; j < r; j++) { const q = Q[j * r + i] * f; for (let t = 0; t < Z; t++) V[a * Z + t] += q * rows[j][t]; }
   });
-  // Orthogonal Procrustes: Q3 = argmin |Q3 V - R0| over rotations; with C = R0 V^T = X S Y^T, Q3 = X D Y^T.
+  // Orthogonal Procrustes: Q3 = argmin |Q3 V - R0| over orthogonal maps; with C = R0 V^T = X S Y^T, Q3 = X Y^T.
   const C = new Float64Array(9);
   for (let a = 0; a < 3; a++) for (let b = 0; b < 3; b++) { let d = 0; for (let t = 0; t < Z; t++) d += R0[a * Z + t] * V[b * Z + t]; C[a * 3 + b] = d; }
   const CtC = new Float64Array(9);
@@ -167,12 +169,19 @@ export function directions(mix, axes, R0) {
     const o1 = (j + 1) % 3, o2 = (j + 2) % 3;
     X[j] = X[3 + o1] * X[6 + o2] - X[6 + o1] * X[3 + o2]; X[3 + j] = X[6 + o1] * X[o2] - X[o1] * X[6 + o2]; X[6 + j] = X[o1] * X[3 + o2] - X[3 + o1] * X[o2];
   }
-  const det = (M) => M[0] * (M[4] * M[8] - M[5] * M[7]) - M[1] * (M[3] * M[8] - M[5] * M[6]) + M[2] * (M[3] * M[7] - M[4] * M[6]);
-  const d = Math.sign(det(X) * det(Y)) || 1, Q3 = new Float64Array(9);
-  for (let a = 0; a < 3; a++) for (let b = 0; b < 3; b++) Q3[a * 3 + b] = X[a * 3] * Y[b * 3] + X[a * 3 + 1] * Y[b * 3 + 1] + d * X[a * 3 + 2] * Y[b * 3 + 2];
+  const Q3 = new Float64Array(9);
+  for (let a = 0; a < 3; a++) for (let b = 0; b < 3; b++) Q3[a * 3 + b] = X[a * 3] * Y[b * 3] + X[a * 3 + 1] * Y[b * 3 + 1] + X[a * 3 + 2] * Y[b * 3 + 2];
   const out = new Float32Array(3 * Z);
   for (let a = 0; a < 3; a++) for (let t = 0; t < Z; t++) out[a * Z + t] = Q3[a * 3] * V[t] + Q3[a * 3 + 1] * V[Z + t] + Q3[a * 3 + 2] * V[2 * Z + t];
   return { V: out, share: (ev[0][0] + ev[1][0] + ev[2][0]) / tr };
+}
+
+// The image size a cell draws at: 0 (16 px), 1 (64 px) or 2 (256 px) by its size on screen, but only a tier whose
+// store holds the cells in view (with room to spare): a smaller one would evict tiles in view and remake them forever.
+export function tierFor(cellPx, inView, caps) {
+  let t = cellPx > 100 ? 2 : cellPx > 24 ? 1 : 0;
+  while (t > 0 && inView > 0.8 * caps[t]) t--;
+  return t;
 }
 
 export function tileZ(V, p, psi) {
