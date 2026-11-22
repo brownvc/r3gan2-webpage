@@ -5,7 +5,9 @@
 //  - directions(mix, axes, R0): the mix's three strongest noise directions (noise_axes.py), in a fixed orientation.
 //  - tileZ(V, p, psi): a tile's z, the noise minimap's point p along those directions, at length psi * 8.
 
-export function geodesic(levels) {
+// anchorLevel (optional): also, for each vertex, the triangle of that coarser level it lies in (anchorOf, an index into
+// anchorTri, the coarse triangles' vertices; a coarse level's vertices are the first ones of every finer level).
+export function geodesic(levels, anchorLevel) {
   const t = (1 + Math.sqrt(5)) / 2;
   const P = [[-1, t, 0], [1, t, 0], [-1, -t, 0], [1, -t, 0], [0, -1, t], [0, 1, t], [0, -1, -t], [0, 1, -t], [t, 0, -1], [t, 0, 1], [-t, 0, -1], [-t, 0, 1]];
   let F = [[0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11], [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8],
@@ -14,7 +16,10 @@ export function geodesic(levels) {
   let nv = 0;
   const add = (x, y, z) => { const r = Math.hypot(x, y, z); V[3 * nv] = x / r; V[3 * nv + 1] = y / r; V[3 * nv + 2] = z / r; return nv++; };
   for (const p of P) add(...p);
-  for (let l = 0; l < levels; l++) {
+  let anc = null, coarse = null;  // anc: each current triangle's coarse triangle
+  for (let l = 0; l <= levels; l++) {
+    if (l === anchorLevel) { coarse = F; anc = F.map((_, f) => f); }
+    if (l === levels) break;
     const mid = new Map(), nf = [];
     const m = (a, b) => {
       const k = a < b ? a * n + b : b * n + a; let i = mid.get(k);
@@ -22,8 +27,11 @@ export function geodesic(levels) {
       return i;
     };
     for (const [a, b, c] of F) { const ab = m(a, b), bc = m(b, c), ca = m(c, a); nf.push([a, ab, ca], [b, bc, ab], [c, ca, bc], [ab, bc, ca]); }
+    if (anc) anc = anc.flatMap((x) => [x, x, x, x]);
     F = nf;
   }
+  let anchorOf = null, anchorTri = null;
+  if (anc) { anchorOf = new Int32Array(n); F.forEach((f, k) => { for (const v of f) anchorOf[v] = anc[k]; }); anchorTri = Uint32Array.from(coarse.flat()); }
   // Triangles around each vertex, then ordered counter-clockwise seen from outside.
   const deg = new Uint32Array(n);
   for (const f of F) for (const v of f) deg[v]++;
@@ -49,7 +57,18 @@ export function geodesic(levels) {
     fs.sort((a, b) => ang(a) - ang(b));
     fs.forEach((f, j) => corners.set(cen.subarray(3 * f, 3 * f + 3), 3 * (cellStart[i] + j)));
   }
-  return { n, centres: Float32Array.from(V), cellStart, corners, faces: Uint32Array.from(F.flat()), around };
+  return { n, centres: Float32Array.from(V), cellStart, corners, faces: Uint32Array.from(F.flat()), around, anchorOf, anchorTri };
+}
+
+// A cell's anchors (as the map's, an anchor image every few tiles): the 3 corners of the coarse triangle it lies in,
+// weighted by its barycentric coordinates there (1 on itself for a cell that is an anchor). -> [[anchor, weight] x3]
+export function anchorWeights(g, i) {
+  const k = g.anchorOf[i], [a, b, c] = [g.anchorTri[3 * k], g.anchorTri[3 * k + 1], g.anchorTri[3 * k + 2]];
+  const v = (j) => [g.centres[3 * j], g.centres[3 * j + 1], g.centres[3 * j + 2]], p = v(i), A = v(a), B = v(b), C = v(c);
+  const cr = (x, y) => [x[1] * y[2] - x[2] * y[1], x[2] * y[0] - x[0] * y[2], x[0] * y[1] - x[1] * y[0]], dt = (x, y) => x[0] * y[0] + x[1] * y[1] + x[2] * y[2];
+  const det = dt(A, cr(B, C)), w = [dt(p, cr(B, C)) / det, dt(p, cr(C, A)) / det, dt(p, cr(A, B)) / det].map((x) => Math.max(0, x));
+  const s = w[0] + w[1] + w[2];
+  return [[a, w[0] / s], [b, w[1] / s], [c, w[2] / s]];
 }
 
 // The noise field over the globe: where the map blends random anchors in 64 dimensions (nearly orthogonal there, so
@@ -90,19 +109,29 @@ export function cellAt(g, p) {
 // 1000 points on the sphere (soft 0: hard borders). Weights under 1% are dropped; the rest sum to 1. Blocked classes
 // own nothing: their neighbours take their place.
 const SPACING = Math.sqrt(4 * Math.PI / 1000);
-export function classMix(points, p, soft, blocked) {
-  const near = [];  // [angle^2, class], the 6 nearest, sorted
+// As the map's softClassAt: each class weighs exp(-(d^2 - dmin^2) / T), d its angle from p, T = 2 soft s^2, which fades
+// a neighbour in over about soft * s on each side of a border; every class counts (weights under 0.01 go). s is the map's
+// region size: here the nearest class's distance to its own nearest neighbour (spacing, from nearestSpacing), since the
+// classes cluster (a typical one's nearest is 0.18 SPACING away); without spacing, SPACING.
+export function nearestSpacing(points, blocked) {
+  const C = points.length / 3, out = new Float32Array(C).fill(Math.PI);
+  for (let a = 0; a < C; a++) for (let b = a + 1; b < C; b++) {
+    if (blocked.has(a) || blocked.has(b)) continue;
+    const d = Math.acos(Math.max(-1, Math.min(1, points[3 * a] * points[3 * b] + points[3 * a + 1] * points[3 * b + 1] + points[3 * a + 2] * points[3 * b + 2])));
+    if (d < out[a]) out[a] = d; if (d < out[b]) out[b] = d;
+  }
+  return out;
+}
+export function classMix(points, p, soft, blocked, spacing) {
+  const d2 = []; let dmin = Infinity, cmin = -1;
   for (let c = 0; c < points.length / 3; c++) {
     if (blocked.has(c)) continue;
     const a = Math.acos(Math.max(-1, Math.min(1, points[3 * c] * p[0] + points[3 * c + 1] * p[1] + points[3 * c + 2] * p[2])));
-    const a2 = a * a;
-    if (near.length < 6 || a2 < near[near.length - 1][0]) { near.push([a2, c]); near.sort((x, y) => x[0] - y[0]); if (near.length > 6) near.pop(); }
+    d2.push([a * a, c]); if (a * a < dmin) { dmin = a * a; cmin = c; }
   }
-  const mix = {}; let s = 0;
-  for (const [a2, c] of near) {
-    const w = soft > 0 ? Math.exp(-(a2 - near[0][0]) / (soft * SPACING * SPACING)) : (c === near[0][1] ? 1 : 0);
-    if (w >= 0.01) { mix[c] = w; s += w; }
-  }
+  if (!(soft > 0)) return { [cmin]: 1 };
+  const sp = spacing ? spacing[cmin] : SPACING, T = 2 * soft * sp * sp, mix = {}; let s = 0;
+  for (const [a2, c] of d2) { const w = Math.exp(-(a2 - dmin) / T); if (w >= 0.01) { mix[c] = w; s += w; } }
   for (const c in mix) mix[c] /= s;
   return mix;
 }

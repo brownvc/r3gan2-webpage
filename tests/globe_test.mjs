@@ -1,6 +1,6 @@
 // Tests for globe.js (the class globe: tiling, class field, noise directions). Run: node tests/globe_test.mjs
 import assert from 'node:assert/strict';
-import { geodesic, cellAt, classMix, directions, tileZ, noiseField, noisePoint, tierFor, neighbours, gridTargets } from '../globe.js';
+import { geodesic, cellAt, classMix, directions, tileZ, noiseField, noisePoint, tierFor, neighbours, gridTargets, anchorWeights, nearestSpacing } from '../globe.js';
 
 const dot = (a, b) => a.reduce((s, x, i) => s + x * b[i], 0);
 const norm = (a) => Math.sqrt(dot(a, a));
@@ -65,6 +65,34 @@ const tests = {
     assert.ok(!('0' in blocked), JSON.stringify(blocked));
     const hard = classMix(pts, unit([1, 1, 0.001]), 0, new Set());
     assert.equal(Object.keys(hard).length, 1);
+  },
+  classMixLikeTheMap() {  // the map's border: weight exp(-(d^2 - dmin^2) / T), T = 2 soft spacing^2, over every class
+    const SP = Math.sqrt(4 * Math.PI / 1000), soft = 0.1, T = 2 * soft * SP * SP;
+    // class 0 at the point; class 1 at the angle where d^2 - dmin^2 = T, so its weight is e^-1 of class 0's
+    const p = [0, 0, 1], a1 = Math.sqrt(T), pts = [0, 0, 1, Math.sin(a1), 0, Math.cos(a1)];
+    const m = classMix(Float32Array.from(pts), p, soft, new Set());
+    assert.ok(Math.abs(m[1] / m[0] - Math.exp(-1)) < 1e-4, JSON.stringify(m));
+    // eight classes all at the same distance: all count (not only the nearest 6)
+    const ring = []; for (let k = 0; k < 8; k++) ring.push(0.05 * Math.cos(k), 0.05 * Math.sin(k), Math.sqrt(1 - 0.0025));
+    assert.equal(Object.keys(classMix(Float32Array.from(ring), p, soft, new Set())).length, 8);
+  },
+  classMixLocalSpacing() {  // with each class's distance to its nearest neighbour, the border scales to it (the map's region size)
+    const soft = 0.1, near = 0.02, T = 2 * soft * near * near, a1 = Math.sqrt(T);
+    const pts = Float32Array.from([0, 0, 1, Math.sin(a1), 0, Math.cos(a1)]), spacing = Float32Array.from([near, near]);
+    const m = classMix(pts, [0, 0, 1], soft, new Set(), spacing);
+    assert.ok(Math.abs(m[1] / m[0] - Math.exp(-1)) < 1e-4, JSON.stringify(m));
+    assert.deepEqual(Array.from(nearestSpacing(Float32Array.from([0, 0, 1, Math.sin(0.1), 0, Math.cos(0.1), 0, Math.sin(0.3), Math.cos(0.3)]), new Set()), (x) => +x.toFixed(4)), [0.1, 0.1, 0.3]);
+  },
+  anchors() {  // every cell blends the 3 corners (cells every 4th along the tiling) of the coarse triangle it lies in
+    const ga = geodesic(7, 5), na = 10 * 4 ** 5 + 2;
+    for (let i = 0; i < ga.n; i += 37) {
+      const w = anchorWeights(ga, i), c = vec(ga.centres, i);
+      assert.ok(w.length === 3 && w.every(([a, x]) => a < na && x >= -1e-9), `cell ${i}: ${JSON.stringify(w)}`);
+      assert.ok(Math.abs(w.reduce((s, [, x]) => s + x, 0) - 1) < 1e-6, `cell ${i}: weights sum`);
+      const r = [0, 1, 2].map((t) => w.reduce((s, [a, x]) => s + x * ga.centres[3 * a + t], 0));
+      assert.ok(Math.acos(Math.min(1, dot(unit(r), c))) < 1e-3, `cell ${i}: the anchors do not surround it`);
+      if (i < na) assert.ok(w.some(([a, x]) => a === i && Math.abs(x - 1) < 1e-6), `anchor ${i} is not its own`);
+    }
   },
   directionsPure() {
     const { V, share } = directions({ 0: 1 }, synthAxes(4), E3);

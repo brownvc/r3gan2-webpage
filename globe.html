@@ -190,7 +190,7 @@
 
 <script type="module">
 import { createLab, MODELS, weightsFile, fileExists, savedInBrowser, gauss, Z, fmt, SMALL_DEVICE } from './lab.js?v=20261121a';
-import { geodesic, classMix, directions, tileZ, noiseField, noisePoint, tierFor, neighbours, gridTargets } from './globe.js?v=20261122h';
+import { geodesic, classMix, directions, tileZ, noiseField, noisePoint, tierFor, neighbours, gridTargets, anchorWeights, nearestSpacing } from './globe.js?v=20261122j';
 const $ = (id) => document.getElementById(id);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 // Left out, as on the map: clothing classes whose training photos are mostly people in swimwear or underwear.
@@ -230,7 +230,7 @@ async function main() {
   // ---- the tiling ----
   status('Building the globe…');
   await new Promise((r) => setTimeout(r));
-  const g = geodesic(7), N = g.n;
+  const g = geodesic(7, 5), N = g.n;
   const rad = new Float32Array(N);  // each cell's circumradius: the image is scaled so the cell fits it at any rotation
   const cellData = new Float32Array(N * 32);  // per cell: centre + radius, then 6 corners (a pentagon repeats its last), 8 vec4
   for (let i = 0; i < N; i++) {
@@ -274,14 +274,33 @@ async function main() {
     return d;
   }
   const centre = (i) => [g.centres[3 * i], g.centres[3 * i + 1], g.centres[3 * i + 2]];
-  const mixAt = (i) => (mixCache[i] ??= classMix(GF.points, centre(i), soft, blocked));
-  // Each tile's noise point: the smooth random field at its place on the globe (as the map's anchors vary its z),
-  // turned by the noise minimap's rotation, so spinning the minimap moves every tile's noise together.
-  let NF = noiseField(noiseSeed), qCache = new Array(N), Z0 = gauss(Z, noiseSeed + 1000003);  // Z0: the seed's typical z
+  // As on the map, anchors: an anchor image (class mix, z) every 4 cells (the vertices of the tiling two levels
+  // coarser), and each cell blends the 3 around it (anchorWeights): the class mix, and z, put back at the typical length
+  // sqrt(Z). So a region's tiles morph from one sample to the next, and across a border into the next class.
+  let ancMix = new Map(), ancZ = new Map();
+  const anchorMix = (a) => { let m = ancMix.get(a); if (!m) { m = classMix(GF.points, centre(a), soft, blocked, GF.spacing ??= nearestSpacing(GF.points, blocked)); ancMix.set(a, m); } return m; };
+  const anchorZ = (a) => { let z = ancZ.get(a); if (!z) { z = gauss(Z, (noiseSeed * 10243 + a) % 2147483647); ancZ.set(a, z); } return z; };
+  const mixAt = (i) => {
+    if (mixCache[i]) return mixCache[i];
+    const mix = {}; let t = 0;
+    for (const [a, w] of anchorWeights(g, i)) { if (!w) continue; const m = anchorMix(a); for (const c in m) { mix[c] = (mix[c] || 0) + w * m[c]; t += w * m[c]; } }
+    for (const c in mix) { mix[c] /= t; if (mix[c] < 0.005) delete mix[c]; }
+    return (mixCache[i] = mix);
+  };
+  function z0At(i) {
+    const z = new Float32Array(Z); let s = 0;
+    for (const [a, w] of anchorWeights(g, i)) { if (!w) continue; const n = anchorZ(a); for (let k = 0; k < Z; k++) z[k] += w * n[k]; }
+    for (let k = 0; k < Z; k++) s += z[k] * z[k];
+    s = Math.sqrt(Z / s); for (let k = 0; k < Z; k++) z[k] *= s;
+    return z;
+  }
+  // Each tile's noise point: the smooth random field at its place on the globe, turned by the noise minimap's
+  // rotation, so spinning the minimap moves every tile's noise along its class's 3 strongest directions together.
+  let NF = noiseField(noiseSeed), qCache = new Array(N);
   function tileInputs(i) {
     const mix = mixAt(i), q = (qCache[i] ??= noisePoint(NF, centre(i)));
     const qq = [0, 1, 2].map((t) => Mm[t] * q[0] + Mm[3 + t] * q[1] + Mm[6 + t] * q[2]);  // Mm^T q
-    return { z: tileZ(dirsFor(mix).V, qq, psi, Z0), mix };
+    return { z: tileZ(dirsFor(mix).V, qq, psi, z0At(i)), mix };
   }
 
   // ---- tile images: GPU texture arrays at 16, 64 and 256 px. Every tile made keeps a 16 px copy; 64 and 256 px keep
@@ -631,16 +650,16 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     if (b.dataset.m === G.model || b.disabled) return;
     configure(async () => {
       const files = await globeFiles(b.dataset.m); await G.setModel(b.dataset.m);
-      GF = files; mixCache = new Array(N); dirCache = new Map(); epoch++; clearTiles();
+      GF = files; mixCache = new Array(N); ancMix = new Map(); dirCache = new Map(); epoch++; clearTiles();
       for (const c of Object.keys(MODELS)) document.querySelector(`.segsub [data-m="${c}"]`).textContent = '';
     });
   });
   $('th16').onchange = () => configure(async () => { await G.setOptions({ half: $('th16').checked }); remake(); });
   $('gh16').onchange = () => configure(async () => { await G.setOptions({ gHalf: $('gh16').checked }); remake(); });
   $('trunc').oninput = () => { psi = +$('trunc').value; remake(); showConfig(); };
-  $('soft').oninput = () => { soft = +$('soft').value; mixCache = new Array(N); remake(); showConfig(); };
+  $('soft').oninput = () => { soft = +$('soft').value; mixCache = new Array(N); ancMix = new Map(); remake(); showConfig(); };
   $('nstr').oninput = () => { noiseStr = +$('nstr').value; NOISE = makeNoise(); remake(); showConfig(); };
-  const newField = () => { NF = noiseField(noiseSeed); qCache = new Array(N); Z0 = gauss(Z, noiseSeed + 1000003); };
+  const newField = () => { NF = noiseField(noiseSeed); qCache = new Array(N); ancZ = new Map(); };
   $('nseed').onchange = () => { noiseSeed = clamp(Math.round(+$('nseed').value) || 0, 0, 999999); NOISE = makeNoise(); newField(); remake(); showConfig(); };
   $('newn').onclick = () => { noiseSeed = randSeed(); NOISE = makeNoise(); newField(); remake(); showConfig(); };
   for (const c of Object.keys(MODELS)) {
@@ -757,7 +776,7 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
   function miniPump() {
     if (held || switching || G.lost || centreCell < 0 || miniPend.size >= MINI_SLOTS) return;
     const H = mul(tr(Dm), Vm), mix = mixAt(centreCell);
-    const key = [mixKey(mix), psi, noiseSeed, noiseStr, G.model, G.options.half, G.options.gHalf, H.map((x) => Math.round(x * 20)).join()].join('|');
+    const key = [mixKey(mix), centreCell, psi, noiseSeed, noiseStr, G.model, G.options.half, G.options.gHalf, H.map((x) => Math.round(x * 20)).join()].join('|');  // centreCell: its z
     if (key !== miniKey) {
       if (key !== nextKey) { nextKey = key; nextSince = performance.now(); }
       if (performance.now() - nextSince < SETTLE_MS) return;
@@ -777,7 +796,7 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     const pv = !dec && !!G.preview;
     miniPend.add(i);
     const y = [mg.centres[3 * i], mg.centres[3 * i + 1], mg.centres[3 * i + 2]], q = [0, 1, 2].map((a) => H[3 * a] * y[0] + H[3 * a + 1] * y[1] + H[3 * a + 2] * y[2]);
-    const z = tileZ(dirsFor(mix).V, q, psi, Z0), c = Float32Array.from(G.classVec(mix));
+    const z = tileZ(dirsFor(mix).V, q, psi, z0At(centreCell)), c = Float32Array.from(G.classVec(mix));
     (pv ? G.preview(z, c, NOISE).then((r) => r.fit) : G.generate(z, c, NOISE))
       .then((img) => createImageBitmap(img, pv ? {} : { resizeWidth: 64, resizeHeight: 64, resizeQuality: 'high' }))
       .then((b) => { if (key === miniKey) { if (miniImg[i]) miniImg[i].close(); miniImg[i] = b; miniOf[i] = key; miniDec[i] = !pv; miniMixOf[i] = mk; } else b.close(); })
