@@ -24,11 +24,11 @@ with sync_playwright() as p:
     s = pg.evaluate(G); check(s['drawn'] >= s['inView'] > 20, f"tiles drawn: {s['drawn']} of {s['inView']} in view")
     box = pg.locator('#globe').bounding_box(); cx, cy = box['x'] + box['width'] / 2, box['y'] + box['height'] / 2
     r0, v0 = pg.evaluate(f'{G}.rot'), pg.evaluate(f'{G}.miniView')
-    pg.mouse.move(cx, cy); pg.mouse.down(); pg.mouse.move(cx + 80, cy + 30, steps=8); pg.mouse.up(); pg.wait_for_timeout(200)
+    pg.mouse.move(cx, cy); pg.mouse.down(); pg.mouse.move(cx + 80, cy + 30, steps=8); pg.wait_for_timeout(150); pg.mouse.up(); pg.wait_for_timeout(200)  # a pause first: no flick
     check(pg.evaluate(f'{G}.rot') != r0, 'a drag turns the globe')
     r1 = pg.evaluate(f'{G}.rot'); pg.keyboard.press('ArrowLeft'); pg.wait_for_timeout(300)
     check(pg.evaluate(f'{G}.rot') != r1, 'an arrow key turns the globe')
-    f1, nc = pg.evaluate(f'{G}.miniFront'), pg.evaluate(f'{G}.noiseCentre')
+    f1, nc = pg.evaluate(f'[{G}.miniFront, {G}.noiseCentre]')
     v1 = pg.evaluate(f'{G}.miniView')
     check(v0 is not None and v0 == v1, f'turning the class globe leaves the noise globe still: {v0} -> {v1}')
     check(nc is not None and max(abs(a - b) for a, b in zip(f1, nc)) < 1e-3, f'the noise globe faces the noise at the view centre: {f1} vs {nc}')
@@ -37,6 +37,7 @@ with sync_playwright() as p:
     s0 = pg.evaluate(G); mb = pg.locator('#mini').bounding_box(); mx, my = mb['x'] + mb['width'] / 2, mb['y'] + mb['height'] / 2
     pg.mouse.move(mx, my); pg.mouse.down()
     for k in range(10): pg.mouse.move(mx + 6 * k, my - 3 * k)
+    pg.wait_for_timeout(150)  # a pause before the release: a spin, not a flick
     pg.mouse.up()
     s1 = pg.evaluate(G); check(s1['p'] != s0['p'] and s1['epoch'] > s0['epoch'], f"noise point moved {s0['p']} -> {s1['p']}")
     check(s1['miniView'] != s0['miniView'], 'spinning the noise globe turns it')
@@ -81,6 +82,22 @@ with sync_playwright() as p:
     pg.keyboard.press('p'); pg.wait_for_timeout(1500); m0 = pg.evaluate(f'{G}.made'); pg.wait_for_timeout(2500); m1 = pg.evaluate(f'{G}.made')
     check(m1 == m0, f'P pauses: {m0} -> {m1} made')
     pg.keyboard.press('p'); pg.wait_for_timeout(2500); check(pg.evaluate(f'{G}.made') > m1, 'P again resumes')
+    pg.goto(URL, wait_until='load'); pg.wait_for_function(f'{G} && {G}.drawn >= 50', timeout=180000); pg.wait_for_timeout(500)
+    cap = pg.inner_text('#minicap'); check('golden retriever' in cap, f'the noise globe names its class: {cap!r}')
+    # a flick keeps either globe turning after the release
+    def flick(sel, key):
+        bb = pg.locator(sel).bounding_box(); x, y = bb['x'] + bb['width'] / 2, bb['y'] + bb['height'] / 2
+        pg.mouse.move(x, y); pg.mouse.down()
+        for k in range(1, 6): pg.mouse.move(x + 12 * k, y + 4 * k)
+        pg.mouse.up(); pg.wait_for_timeout(60); a = pg.evaluate(f'{G}.{key}'); pg.wait_for_timeout(300); b = pg.evaluate(f'{G}.{key}')
+        pg.wait_for_timeout(2500); return a != b
+    check(flick('#globe', 'rot'), 'a flick keeps the class globe turning')
+    check(flick('#mini', 'miniView'), 'a flick keeps the noise globe turning')
+    # the noise globe's size button: larger, then back
+    w0 = pg.evaluate("document.getElementById('mini').clientWidth"); pg.click('#minisize'); pg.wait_for_timeout(300)
+    w1, cw = pg.evaluate("document.getElementById('mini').clientWidth"), pg.evaluate("document.getElementById('mini').width")
+    pg.click('#minisize'); pg.wait_for_timeout(300); w2 = pg.evaluate("document.getElementById('mini').clientWidth")
+    check(w1 > 1.5 * w0 and cw >= w1 and w2 == w0, f'the size button grows the noise globe and shrinks it back: {w0} -> {w1} (canvas {cw}) -> {w2}')
     # loading: a data folder given without its trailing slash, and no data parameter (the files next to the page)
     base = URL.split('globe.html')[0]
     for u in (base + 'globe.html?data=.', base + 'globe.html'):

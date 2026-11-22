@@ -37,10 +37,20 @@
   #stats .cap { margin-top: 6px; font-size: 12.5px; color: rgba(255, 255, 255, 0.6); }
   /* The noise minimap: a small globe of noise, turning every tile's noise point with it; the ring marks the noise of
      the tile at the centre of the view. */
-  #mini { position: absolute; left: 12px; bottom: 12px; width: 200px; height: 200px; border-radius: 50%; background: transparent;
+  .mapwrap { --mini: 200px; }
+  .mapwrap.minibig { --mini: 400px; }
+  #mini { position: absolute; left: 12px; bottom: 12px; width: var(--mini); height: var(--mini); border-radius: 50%; background: transparent;
     cursor: grab; touch-action: none; }
-  #minicap { position: absolute; left: 12px; bottom: 218px; padding: 1px 8px; border-radius: 4px; font-size: 12.5px;
-    color: rgba(255, 255, 255, 0.85); background: rgba(33, 37, 41, 0.82); }
+  #minicap { position: absolute; left: 12px; bottom: calc(var(--mini) + 18px); max-width: calc(var(--mini) + 120px); padding: 1px 8px;
+    border-radius: 4px; font-size: 12.5px; color: rgba(255, 255, 255, 0.85); background: rgba(33, 37, 41, 0.82); }
+  /* the noise globe's size button, at its top right */
+  #minisize { position: absolute; left: calc(var(--mini) - 14px); bottom: calc(var(--mini) - 14px); width: 28px; height: 28px; padding: 0;
+    display: grid; place-items: center; border: 0; border-radius: 50%; cursor: pointer; color: #fff; background: rgba(33, 37, 41, 0.82); }
+  #minisize:hover { background: rgba(33, 37, 41, 0.95); }
+  #minisize:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+  #minisize svg { width: 14px; height: 14px; }
+  #minisize .shrink, .minibig #minisize .grow { display: none; }
+  .minibig #minisize .shrink { display: inline; }
   #credit { position: absolute; right: 12px; bottom: 6px; padding: 1px 8px; border-radius: 4px; font-size: 12.5px; line-height: 1.5;
     color: var(--ink-muted); background: color-mix(in srgb, var(--bg) 82%, transparent); white-space: nowrap; }
   #credit a { color: inherit; text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 40%, transparent); }
@@ -97,7 +107,10 @@
     #stats { width: 234px; font-size: 12px; }
     .rail { top: auto; bottom: 30px; left: 8px; right: 8px; width: auto; max-width: none; max-height: 46%; }
     .railtab { top: auto; bottom: 30px; right: 8px; }
-    #mini { top: 12px; right: 12px; left: auto; bottom: auto; width: 120px; height: 120px; }
+    .mapwrap { --mini: 120px; }
+    .mapwrap.minibig { --mini: 220px; }
+    #mini { top: 12px; right: 12px; left: auto; bottom: auto; }
+    #minisize { top: calc(var(--mini) - 2px); right: 4px; left: auto; bottom: auto; }
     #minicap { display: none; }
   }
 </style>
@@ -109,6 +122,7 @@
   <div id="stats"></div>
   <div id="minicap">Noise: spin to change</div>
   <canvas id="mini" title="The noise globe: spin it to move every class along its own strongest noise directions" aria-label="Noise globe"></canvas>
+  <button id="minisize" title="Larger noise globe" aria-label="Larger noise globe" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path class="grow" d="M9.5 2.5h4v4M13.5 2.5 9 7M6.5 13.5h-4v-4M2.5 13.5 7 9"/><path class="shrink" d="M13 7H9V3M9 7l4.5-4.5M3 9h4v4M7 9l-4.5 4.5"/></svg></button>
   <div id="status" role="status">Starting WebGPU…</div>
   <button class="railtab" id="railtab" hidden title="Show the panel (H)" aria-controls="rail"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Settings</button>
   <aside class="rail" id="rail" hidden>
@@ -176,7 +190,7 @@
 
 <script type="module">
 import { createLab, MODELS, weightsFile, fileExists, savedInBrowser, gauss, Z, fmt, SMALL_DEVICE } from './lab.js?v=20261121a';
-import { geodesic, classMix, directions, tileZ, noiseField, noisePoint, tierFor } from './globe.js?v=20261122f';
+import { geodesic, classMix, directions, tileZ, noiseField, noisePoint, tierFor } from './globe.js?v=20261122g';
 const $ = (id) => document.getElementById(id);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 // Left out, as on the map: clothing classes whose training photos are mostly people in swimwear or underwear.
@@ -386,19 +400,35 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     const r2 = [r0[1] * r1[2] - r0[2] * r1[1], r0[2] * r1[0] - r0[0] * r1[2], r0[0] * r1[1] - r0[1] * r1[0]];
     Rm = [...r0, ...r1, ...r2];
   }
+  // A flick, as on the map: the drag's velocity (smoothed, px/s) carries on after the release and dies away (e^-4t);
+  // a release more than 80 ms after the last move does not fling. apply(dx, dy) moves by pixels.
+  function flinger(apply) {
+    let vx = 0, vy = 0, t = 0, on = false, last = 0;
+    return {
+      down() { vx = vy = 0; on = false; t = performance.now(); },
+      move(dx, dy) { const now = performance.now(), dt = Math.max(1, now - t) / 1000; vx = 0.8 * vx + 0.2 * dx / dt; vy = 0.8 * vy + 0.2 * dy / dt; t = now; },
+      up() { on = performance.now() - t <= 80 && Math.hypot(vx, vy) > 30; last = performance.now(); },
+      step() {
+        const now = performance.now(), dt = Math.min(0.05, (now - last) / 1000); last = now; if (!on) return;
+        apply(vx * dt, vy * dt); const k = Math.exp(-4 * dt); vx *= k; vy *= k; if (Math.hypot(vx, vy) < 4) on = false;
+      },
+    };
+  }
+  const globeFling = flinger((dx, dy) => turn(dx / zoom, dy / zoom));
   const pointers = new Map(); let pinch = 0;
-  cv.addEventListener('pointerdown', (e) => { cv.setPointerCapture(e.pointerId); pointers.set(e.pointerId, [e.clientX, e.clientY]); cv.classList.add('drag'); });
+  cv.addEventListener('pointerdown', (e) => { cv.setPointerCapture(e.pointerId); pointers.set(e.pointerId, [e.clientX, e.clientY]); cv.classList.add('drag'); globeFling.down(); });
   cv.addEventListener('pointermove', (e) => {
     const p = pointers.get(e.pointerId); if (!p) return;
     if (pointers.size === 2) {
       const [a, b] = [...pointers.values()], d0 = Math.hypot(a[0] - b[0], a[1] - b[1]); pointers.set(e.pointerId, [e.clientX, e.clientY]);
       const [c, dd] = [...pointers.values()], d1 = Math.hypot(c[0] - dd[0], c[1] - dd[1]);
       if (d0 > 0) zoom = clamp(zoom * d1 / d0, fitR() * 0.5, maxZoom());
-      return;
+      globeFling.down(); return;  // a pinch does not fling
     }
-    turn((e.clientX - p[0]) / zoom, (e.clientY - p[1]) / zoom); pointers.set(e.pointerId, [e.clientX, e.clientY]);
+    const dx = e.clientX - p[0], dy = e.clientY - p[1];
+    turn(dx / zoom, dy / zoom); globeFling.move(dx, dy); pointers.set(e.pointerId, [e.clientX, e.clientY]);
   });
-  const up = (e) => { pointers.delete(e.pointerId); if (!pointers.size) cv.classList.remove('drag'); };
+  const up = (e) => { pointers.delete(e.pointerId); if (!pointers.size) { cv.classList.remove('drag'); globeFling.up(); } };
   cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
   cv.addEventListener('wheel', (e) => { e.preventDefault(); zoom = clamp(zoom * Math.exp(-e.deltaY * 0.0015), fitR() * 0.5, maxZoom()); }, { passive: false });
   addEventListener('keydown', (e) => {
@@ -443,6 +473,7 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
   // ---- the frame ----
   const inst = new Uint32Array(MAXI * 4), CAPS = TIERS.map((T, t) => (t ? T.cap : Infinity)); let drawn = 0, inView = 0, lastInView = 0, centreCell = -1;
   function frame() {
+    globeFling.step();
     const S = zoom * dpr, sx = 2 * S / W, sy = 2 * S / H;
     dev.queue.writeBuffer(uniBuf, 0, new Float32Array([...Rm.slice(0, 3), 0, ...Rm.slice(3, 6), 0, ...Rm.slice(6, 9), 0, sx, sy, SIDE, 0]));
     const cand = []; let n = 0, best = -2; inView = 0;
@@ -603,20 +634,26 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     const k = [v[1], -v[0], 0], K = [0, -k[2], k[1], k[2], 0, -k[0], -k[1], k[0], 0], K2 = mul(K, K), f = 1 / (1 + v[2]);
     Dm = ortho(mul([0, 1, 2, 3, 4, 5, 6, 7, 8].map((j) => (j % 4 === 0) + K[j] + K2[j] * f), Dm));
   }
-  let mdrag = null;
-  mini.addEventListener('pointerdown', (e) => { mini.setPointerCapture(e.pointerId); mdrag = [e.clientX, e.clientY]; });
-  mini.addEventListener('pointermove', (e) => {
-    if (!mdrag) return;
-    const r = mini.clientWidth / 2, ax = (e.clientX - mdrag[0]) / r, ay = (e.clientY - mdrag[1]) / r; mdrag = [e.clientX, e.clientY];
+  function spinMini(dx, dy) {  // a drag (or flick) of dx, dy CSS px on the minimap
+    const r = mini.clientWidth / 2, ax = dx / r, ay = dy / r;
     const cy = Math.cos(ax), sy = Math.sin(ax), cx = Math.cos(ay), sx = Math.sin(ay);
     const R = mul([1, 0, 0, 0, cx, -sx, 0, sx, cx], [cy, 0, sy, 0, 1, 0, -sy, 0, cy]);
     // the drawn globe turns by R; the view centre's noise becomes the point now at the front: Mm <- Mm Dm^T R Dm
     Mm = ortho(mul(Mm, mul(tr(Dm), mul(R, Dm)))); Dm = ortho(mul(R, Dm)); Vm = ortho(mul(R, Vm));
     P = Mm.slice(6, 9); remake();
+  }
+  const miniFling = flinger(spinMini);
+  let mdrag = null;
+  mini.addEventListener('pointerdown', (e) => { mini.setPointerCapture(e.pointerId); mdrag = [e.clientX, e.clientY]; miniFling.down(); });
+  mini.addEventListener('pointermove', (e) => {
+    if (!mdrag) return;
+    const dx = e.clientX - mdrag[0], dy = e.clientY - mdrag[1]; mdrag = [e.clientX, e.clientY];
+    spinMini(dx, dy); miniFling.move(dx, dy);
   });
-  const mup = () => { mdrag = null; }; mini.addEventListener('pointerup', mup); mini.addEventListener('pointercancel', mup);
+  const mup = () => { if (mdrag) miniFling.up(); mdrag = null; }; mini.addEventListener('pointerup', mup); mini.addEventListener('pointercancel', mup);
   function drawMini() {
     const s = Math.round(mini.clientWidth * dpr); if (mini.width !== s || mini.height !== s) { mini.width = s; mini.height = s; }
+    miniFling.step();
     const r = s / 2 - 2 * dpr; mctx.clearRect(0, 0, s, s); faceMini(); const D = Vm;
     const gr = mctx.createRadialGradient(s / 2 - r / 3, s / 2 - r / 3, r / 10, s / 2, s / 2, r);
     gr.addColorStop(0, '#3a4a66'); gr.addColorStop(1, '#0e1420');
@@ -633,8 +670,11 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     // its tiles, once made: the noise globe of the class at the main view's centre. Each is a cell of the sphere with its
     // image laid upright on the cell's tangent plane and shaded, as the main globe's shader does (orthographic, so affine).
     const rot = (p) => [D[0] * p[0] + D[1] * p[1] + D[2] * p[2], D[3] * p[0] + D[4] * p[1] + D[5] * p[2], D[6] * p[0] + D[7] * p[1] + D[8] * p[2]];
+    const fade = Math.max(0, 1 - (performance.now() - miniMixSince) / 500);  // another class's tiles fade out over 0.5 s
     for (let i = 0; i < mg.n; i++) {
       const img = miniImg[i]; if (!img) continue;
+      const a = miniMixOf[i] === miniMix ? 1 : fade; if (a <= 0) continue;
+      mctx.globalAlpha = a;
       const c = rot([mg.centres[3 * i], mg.centres[3 * i + 1], mg.centres[3 * i + 2]]); if (c[2] <= 0) continue;
       let up = [-c[1] * c[0], 1 - c[1] * c[1], -c[1] * c[2]]; if (Math.hypot(...up) < 1e-4) up = [-c[2] * c[0], -c[2] * c[1], 1 - c[2] * c[2]];
       up = unit(up); const rt = [up[1] * c[2] - up[2] * c[1], up[2] * c[0] - up[0] * c[2], up[0] * c[1] - up[1] * c[0]];
@@ -646,21 +686,27 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
       mctx.drawImage(img, 0, 0); mctx.setTransform(1, 0, 0, 1, 0, 0);
       mctx.fillStyle = `rgba(0,0,0,${0.45 * (1 - c[2])})`; mctx.fill(); mctx.restore();
     }
+    mctx.globalAlpha = 1;
     // the ring: the noise at the main view's centre, which the minimap always turns to its front
     mctx.strokeStyle = '#E8B04A'; mctx.lineWidth = 2 * dpr;
     mctx.beginPath(); mctx.arc(s / 2, s / 2, 6 * dpr, 0, 2 * Math.PI); mctx.stroke();
     requestAnimationFrame(drawMini);
   }
-  // The minimap's tiles are made only when the main globe has nothing to do: they differ little from each other, so they
-  // are a backdrop, not a priority. 162 points of the noise sphere, for the class mix at the main view's centre.
-  const mg = geodesic(2); let miniImg = [], miniKey = '';
+  // The minimap's tiles: 162 points of the noise sphere, for the class mix at the main view's centre, which its
+  // caption names. When that mix changes, the old mix's tiles fade out and the new ones fill in.
+  const mg = geodesic(2); let miniImg = [], miniKey = '', miniMix = '', miniMixSince = 0;
+  const miniMixOf = [];
+  $('minisize').onclick = () => {
+    const big = wrap.classList.toggle('minibig'), b = $('minisize'), t = big ? 'Smaller noise globe' : 'Larger noise globe';
+    b.setAttribute('aria-pressed', String(big)); b.title = t; b.setAttribute('aria-label', t);
+  };
   const miniRad = Array.from({ length: mg.n }, (_, i) => {  // each cell's circumradius, as rad[] for the main globe
     let m = 0; for (let j = mg.cellStart[i]; j < mg.cellStart[i + 1]; j++) m = Math.max(m, Math.hypot(...[0, 1, 2].map((t) => mg.corners[3 * j + t] - mg.centres[3 * i + t])));
     return m;
   });
   // A tile drawn at Vm y holds the noise Dm^T Vm y, so its key carries that turn (rounded: a small turn keeps the
   // tiles; a drag on the minimap turns Dm and Vm together, so it keeps them all). Every tile, back included, gets its
-  // Conv-decoded latent (32 px, cheap), one at a time even while the class globe has work, so the minimap is whole
+  // Conv-decoded latent (32 px, cheap), 3 at a time even while the class globe has work, so the minimap is whole
   // and can be spun at once; a tile is decoded with TAEF2 only when the class globe has nothing to do. Front first;
   // old tiles stay drawn until replaced.
   const miniOf = [], miniDec = [], miniPend = new Set(), MINI_SLOTS = 3;
@@ -669,6 +715,12 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     const H = mul(tr(Dm), Vm), mix = mixAt(centreCell);
     const key = [mixKey(mix), psi, noiseSeed, noiseStr, G.model, G.options.half, G.options.gHalf, H.map((x) => Math.round(x * 20)).join()].join('|');
     miniKey = key;
+    const mk = mixKey(mix);
+    if (mk !== miniMix) {
+      miniMix = mk; miniMixSince = performance.now();
+      const top = Object.keys(mix).sort((a, b) => mix[b] - mix[a]), two = top.length > 1 && mix[top[1]] >= 0.3;
+      $('minicap').textContent = `Noise for ${G.names[top[0]]}${two ? ` and ${G.names[top[1]]}` : ''}: spin to change`;
+    }
     const idle = !inflight && !inflightP && !want.length, front = (k) => Vm[6] * mg.centres[3 * k] + Vm[7] * mg.centres[3 * k + 1] + Vm[8] * mg.centres[3 * k + 2];
     let i = -1, best = -2, dec = false;
     for (let k = 0; k < mg.n; k++) if (miniOf[k] !== key && !miniPend.has(k) && front(k) > best) { best = front(k); i = k; }
@@ -680,7 +732,7 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     const z = tileZ(dirsFor(mix).V, q, psi, Z0), c = Float32Array.from(G.classVec(mix));
     (pv ? G.preview(z, c, NOISE).then((r) => r.fit) : G.generate(z, c, NOISE))
       .then((img) => createImageBitmap(img, pv ? {} : { resizeWidth: 64, resizeHeight: 64, resizeQuality: 'high' }))
-      .then((b) => { if (key === miniKey) { if (miniImg[i]) miniImg[i].close(); miniImg[i] = b; miniOf[i] = key; miniDec[i] = !pv; } else b.close(); })
+      .then((b) => { if (key === miniKey) { if (miniImg[i]) miniImg[i].close(); miniImg[i] = b; miniOf[i] = key; miniDec[i] = !pv; miniMixOf[i] = mk; } else b.close(); })
       .catch((e) => console.error(e)).finally(() => { miniPend.delete(i); miniPump(); });
     miniPump();
   }
