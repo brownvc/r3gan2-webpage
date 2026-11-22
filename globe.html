@@ -1,0 +1,595 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="data:,">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>R3GAN2 class globe</title>
+<!-- A copy of map.html (the GANdscape) whose tiles cover a globe of classes laid out by the model's own class codes,
+     driven by a noise minimap. Same lab (lab.js), panel and look; drawing is a WebGPU pass. -->
+<link rel="stylesheet" href="https://use.typekit.net/diw5pgv.css">
+<link rel="stylesheet" href="https://visual.cs.brown.edu/projects/shared/project.css">
+<script>
+  (function () { var t; try { t = localStorage.getItem('theme'); } catch (e) {} var dark = t === 'dark' || (!t && matchMedia('(prefers-color-scheme: dark)').matches); document.documentElement.setAttribute('data-bs-theme', dark ? 'dark' : 'light'); })();
+</script>
+<script defer src="https://visual.cs.brown.edu/projects/shared/project.js"></script>
+<style id="page-skin">
+  :root { --live: #9A6700; }
+  :root[data-bs-theme="dark"] { --live: #E8B04A; }
+  html, body { height: 100%; overscroll-behavior: none; }
+  body { min-height: 0; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+  .bvc-bar { margin-bottom: 0 !important; }
+  button, input, select { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .mapwrap { position: relative; flex: 1; min-height: 0; background: #000; font-size: 16px; line-height: 1.5; }
+  #globe, #labels { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  #globe { touch-action: none; cursor: grab; }
+  #globe.drag { cursor: grabbing; }
+  #labels { pointer-events: none; }
+  #status { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); max-width: calc(100% - 40px);
+    padding: 10px 16px; border-radius: 8px; background: rgba(33, 37, 41, 0.88); color: #E8B04A; font-weight: 600; text-align: center; }
+  #status:empty { display: none; }
+  #stats { position: absolute; top: 12px; left: 12px; box-sizing: border-box; width: 292px; padding: 6px 12px 7px; border-radius: 8px;
+    background: rgba(33, 37, 41, 0.82); color: rgba(255, 255, 255, 0.8); font-size: 14px; line-height: 1.4;
+    font-variant-numeric: tabular-nums lining-nums; }
+  #stats:empty { display: none; }
+  #stats .head { color: #fff; font-weight: 600; }
+  #stats .cap { margin-top: 6px; font-size: 12.5px; color: rgba(255, 255, 255, 0.6); }
+  /* The noise minimap: a small globe of noise; the point facing you is the noise every tile uses. */
+  #mini { position: absolute; left: 12px; bottom: 12px; width: 200px; height: 200px; border-radius: 50%; background: transparent;
+    cursor: grab; touch-action: none; }
+  #minicap { position: absolute; left: 12px; bottom: 218px; padding: 1px 8px; border-radius: 4px; font-size: 12.5px;
+    color: rgba(255, 255, 255, 0.85); background: rgba(33, 37, 41, 0.82); }
+  #credit { position: absolute; right: 12px; bottom: 6px; padding: 1px 8px; border-radius: 4px; font-size: 12.5px; line-height: 1.5;
+    color: var(--ink-muted); background: color-mix(in srgb, var(--bg) 82%, transparent); white-space: nowrap; }
+  #credit a { color: inherit; text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 40%, transparent); }
+  .rail { position: absolute; top: 12px; right: 12px; width: 330px; max-width: calc(100% - 24px); max-height: calc(100% - 48px);
+    display: flex; flex-direction: column; overflow: hidden; box-sizing: border-box; background: var(--bg-soft);
+    border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18); }
+  .rail[hidden] { display: none; }
+  .railhead { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 12px 2px 20px; }
+  .railbody { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 4px 10px 6px 20px; scrollbar-gutter: stable; scrollbar-width: thin; }
+  .iconbtn { flex: none; display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 1px solid transparent;
+    border-radius: 6px; background: none; color: var(--ink-muted); cursor: pointer; }
+  .iconbtn:hover { border-color: var(--border); background: var(--bg); color: var(--accent); }
+  .iconbtn svg, .railtab svg { width: 16px; height: 16px; }
+  .railtab { position: absolute; top: 12px; right: 12px; display: flex; align-items: center; gap: 6px; padding: 6px 12px 6px 9px;
+    background: var(--bg-soft); color: var(--ink); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; font-weight: 600; }
+  .railtab svg { transform: rotate(180deg); }
+  .railtab[hidden] { display: none; }
+  .rail section { padding: 0 0 12px; margin: 0 0 12px; border-bottom: 1px solid var(--border); }
+  .rail section:last-child { border-bottom: 0; margin-bottom: 0; padding-bottom: 8px; }
+  .rail h1 { font-family: var(--font-head); font-size: 26px; font-weight: 600; margin: 0; padding: 0; border: 0; line-height: 1.2; text-align: left; }
+  .rail h1 span { font-weight: 400; color: var(--ink-muted); white-space: nowrap; }
+  .rail section > h2 { text-align: left; font-size: 21px; margin: 0 0 6px; padding: 0; border: 0; }
+  .links { display: flex; gap: 14px; margin: 2px 0 8px; font-size: 14.5px; }
+  .links a { color: var(--accent); text-decoration: none; font-weight: 600; }
+  .help { color: var(--ink-muted); font-size: 14.5px; margin: 4px 0 0; }
+  .note { color: var(--live); font-size: 14px; margin: 6px 0 0; }
+  .note:empty { display: none; }
+  .seg { display: flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+  .seg button { flex: 1; border: 0; border-right: 1px solid var(--border); background: var(--bg); padding: 6px 0; cursor: pointer; }
+  .seg button:last-child { border-right: 0; }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: var(--bg); font-weight: 600; }
+  .seg button:disabled { opacity: 0.45; cursor: not-allowed; }
+  .seg button small { display: block; font-size: 12.5px; font-weight: 400; opacity: 0.8; }
+  .segsub { display: flex; margin-top: 4px; }
+  .segsub span { flex: 1; text-align: center; font-size: 12.5px; line-height: 1.3; color: var(--ink-muted); }
+  .slider { margin: 10px 0 0; }
+  .slider + .slider { margin-top: 14px; }
+  .slabel { display: flex; justify-content: space-between; align-items: baseline; }
+  .val { color: var(--ink-muted); font-size: 14.5px; font-variant-numeric: tabular-nums lining-nums; }
+  .slider input[type=range] { display: block; width: 100%; margin: 4px 0 0; accent-color: var(--accent); }
+  .ends { display: flex; justify-content: space-between; color: var(--ink-muted); font-size: 12.5px; line-height: 1.3; }
+  button.plain { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 5px 11px; cursor: pointer; }
+  .bar { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+  .bar input[type=number] { width: 6.5em; font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--border); border-radius: 5px; padding: 3px 6px; }
+  table.ctl { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; }
+  table.ctl th { text-align: left; font-weight: 600; padding: 3px 8px 3px 0; white-space: nowrap; width: 1%; }
+  table.ctl td { padding: 3px 0; color: var(--ink-muted); }
+  details > summary { cursor: pointer; font-family: var(--font-head); font-size: 21px; }
+  .rail details h3 { font-family: var(--font-head); font-size: 18px; font-weight: 400; color: var(--ink); margin: 18px 0 4px; padding: 0; border: 0; }
+  .rail details h3:first-of-type { margin-top: 8px; }
+  .checks label { display: block; margin: 4px 0; }
+  .checks input { margin: 0 6px 0 0; }
+  @media (max-width: 700px) {
+    #stats { width: 234px; font-size: 12px; }
+    .rail { top: auto; bottom: 30px; left: 8px; right: 8px; width: auto; max-width: none; max-height: 46%; }
+    .railtab { top: auto; bottom: 30px; right: 8px; }
+    #mini { top: 12px; right: 12px; left: auto; bottom: auto; width: 120px; height: 120px; }
+    #minicap { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="mapwrap" id="wrap">
+  <canvas id="globe"></canvas>
+  <canvas id="labels"></canvas>
+  <div id="stats"></div>
+  <div id="minicap">Noise: spin to change</div>
+  <canvas id="mini" title="The noise globe: spin it to move every class along its own strongest noise directions" aria-label="Noise globe"></canvas>
+  <div id="status" role="status">Starting WebGPU…</div>
+  <button class="railtab" id="railtab" hidden title="Show the panel (H)" aria-controls="rail"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Settings</button>
+  <aside class="rail" id="rail" hidden>
+    <div class="railhead">
+      <h1>R3GAN2 <span>class globe</span></h1>
+      <button class="iconbtn" id="hiderail" title="Hide the panel (H)" aria-label="Hide the panel" aria-controls="rail"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    </div>
+    <div class="railbody">
+    <section>
+      <div class="links"><a href="./">Project page</a><a href="map.html">GANdscape</a><a href="https://github.com/brownvc/R3GAN2">Code</a></div>
+      <p class="help">Every tile is generated live on your GPU. Classes sit where the model’s own class codes put them: neighbours in the model are neighbours here.</p>
+      <table class="ctl" aria-label="View controls">
+        <tr><th>Turn</th><td>Drag, or the arrow keys</td></tr>
+        <tr><th>Zoom</th><td>Scroll or pinch</td></tr>
+        <tr><th>Noise</th><td>Spin the small globe</td></tr>
+      </table>
+      <p class="note" id="cfgnote"></p>
+    </section>
+    <section>
+      <h2>Globe</h2>
+      <div class="slider">
+        <div class="slabel"><label for="soft">Class border blend</label><span class="val" id="softv"></span></div>
+        <input id="soft" type="range" min="0" max="0.4" step="0.02" value="0.1" title="How far each class blends into its neighbours across a border">
+        <div class="ends"><span>Hard</span><span>Soft</span></div>
+      </div>
+      <p class="help" id="faith"></p>
+    </section>
+    <section>
+      <h2>Model</h2>
+      <div class="seg" role="group" aria-label="Model">
+        <button class="mbtn" data-m="s">S<small>FID 2.12</small></button><button class="mbtn" data-m="m">M<small>FID 1.60</small></button><button class="mbtn" data-m="l">L<small>FID 1.52</small></button>
+      </div>
+      <div class="segsub"><span data-m="s"></span><span data-m="m"></span><span data-m="l"></span></div>
+    </section>
+    <section>
+      <details>
+        <summary>Advanced</summary>
+        <h3>Truncation</h3>
+        <div class="slider">
+          <div class="slabel"><label for="trunc">Scale ψ</label><span class="val" id="truncv"></span></div>
+          <input id="trunc" type="range" min="0" max="2" step="0.05" value="1" title="Scales z: below 1, more typical and less varied; above 1, more varied">
+          <div class="ends"><span>More typical</span><span>More varied</span></div>
+        </div>
+        <h3>Per-pixel noise</h3>
+        <div class="bar"><label for="nseed">Seed</label><input id="nseed" type="number" min="0" max="999999" step="1"><button class="plain" id="newn">Random</button></div>
+        <div class="slider">
+          <div class="slabel"><label for="nstr">Strength</label><span class="val" id="nstrv"></span></div>
+          <input id="nstr" type="range" min="0" max="2" step="0.1" value="1" title="Scales the per-pixel noise: 0 leaves it out, 1 is what the model was trained with">
+          <div class="ends"><span>None</span><span>Twice</span></div>
+        </div>
+        <h3>Precision</h3>
+        <div class="checks">
+          <label><input id="th16" type="checkbox"> FP16 TAEF2 decoder</label>
+          <label><input id="gh16" type="checkbox"> FP16 generator (less accurate)</label>
+        </div>
+        <p class="help" id="gpu"></p>
+      </details>
+    </section>
+    </div>
+  </aside>
+  <div id="credit">Decoder: <a href="https://huggingface.co/madebyollin/taef2">TAEF2</a> by <a href="https://github.com/madebyollin">Ollin Boer Bohan</a></div>
+</div>
+
+<script type="module">
+import { createLab, MODELS, weightsFile, fileExists, savedInBrowser, gauss, Z, fmt, DATA, SMALL_DEVICE } from './lab.js?v=20261121a';
+import { geodesic, classMix, directions, tileZ } from './globe.js?v=20261122a';
+const $ = (id) => document.getElementById(id);
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+// Left out, as on the map: clothing classes whose training photos are mostly people in swimwear or underwear.
+const BLOCKED = ['bikini', 'brassiere', 'maillot', 'maillot tank suit', 'miniskirt', 'swimming trunks', 'diaper'];
+const SPACING = Math.sqrt(4 * Math.PI / 1000);  // typical distance between class points on the unit sphere
+
+async function main() {
+  const status = (s) => { $('status').textContent = s; };
+  const G = await createLab({ onStatus: status });
+  const Q = new URLSearchParams(location.search);
+  const GD = Q.get('data') || DATA;  // where the globe's own files are (class layout, noise directions)
+  const dev = G.device;
+
+  // ---- model and its globe files ----
+  status('Loading…');
+  const avail = {};
+  await Promise.all(Object.keys(MODELS).map(async (c) => { avail[c] = await fileExists(weightsFile(c)) && await fileExists(GD + `imagenet_${c}_noiseaxes.bin`); }));
+  if (SMALL_DEVICE) avail.m = avail.l = false;
+  const first = MODELS[Q.get('m')] && avail[Q.get('m')] ? Q.get('m') : Object.keys(MODELS).find((c) => avail[c]);
+  if (!first) throw new Error('The models or the globe’s files aren’t available here.');
+  async function globeFiles(code) {
+    const pre = GD + `imagenet_${code}_`;
+    const [lay, aj, ab] = await Promise.all([fetch(pre + 'classlayout.json').then((r) => r.json()), fetch(pre + 'noiseaxes.json').then((r) => r.json()),
+      fetch(pre + 'noiseaxes.bin').then((r) => r.arrayBuffer())]);
+    const rec = new Float32Array(ab), C = rec.length / 521;
+    if (C !== 1000) throw new Error(`noiseaxes.bin holds ${C} classes, not 1000`);
+    const axes = { trace: new Float32Array(C), lambda: new Float32Array(C * 8), U: new Float32Array(C * 512) };
+    for (let c = 0; c < C; c++) { axes.trace[c] = rec[c * 521]; axes.lambda.set(rec.subarray(c * 521 + 1, c * 521 + 9), c * 8); axes.U.set(rec.subarray(c * 521 + 9, c * 521 + 521), c * 512); }
+    return { points: Float32Array.from(lay.points.flat()), n10: lay.neighbours10, axes, R0: Float32Array.from(aj.R0.flat()) };
+  }
+  await G.setModel(first);
+  let GF = await globeFiles(first);
+  await G.setOptions({ half: G.hasF16 && Q.get('h16') !== '0', gHalf: G.hasF16 && Q.get('g16') === '1', decoder: 'taef2' });
+  const blocked = new Set(BLOCKED.map((n) => G.names.indexOf(n)).filter((k) => k >= 0));
+
+  // ---- the tiling ----
+  status('Building the globe…');
+  await new Promise((r) => setTimeout(r));
+  const g = geodesic(7), N = g.n;
+  const rad = new Float32Array(N);  // each cell's circumradius: the image is scaled so the cell fits it at any rotation
+  const cellData = new Float32Array(N * 32);  // per cell: centre + radius, then 6 corners (a pentagon repeats its last), 8 vec4
+  for (let i = 0; i < N; i++) {
+    const s = g.cellStart[i], k = g.cellStart[i + 1] - s; let r = 0;
+    cellData.set(g.centres.subarray(3 * i, 3 * i + 3), i * 32);
+    for (let j = 0; j < 6; j++) {
+      const q = 3 * (s + Math.min(j, k - 1));
+      cellData.set(g.corners.subarray(q, q + 3), i * 32 + 4 + 4 * j);
+      r = Math.max(r, Math.hypot(g.corners[q] - g.centres[3 * i], g.corners[q + 1] - g.centres[3 * i + 1], g.corners[q + 2] - g.centres[3 * i + 2]));
+    }
+    rad[i] = r; cellData[i * 32 + 3] = r;
+  }
+  status('');
+
+  // ---- panel ----
+  let railOpen = true;
+  try { railOpen = localStorage.getItem('r3gan2-globe-panel') !== 'hidden'; } catch (e) { /* no storage */ }
+  function setRail(open) { railOpen = open; $('rail').hidden = !open; $('railtab').hidden = open; try { localStorage.setItem('r3gan2-globe-panel', open ? 'open' : 'hidden'); } catch (e) { /* no storage */ } }
+  $('hiderail').onclick = () => setRail(false); $('railtab').onclick = () => setRail(true); setRail(railOpen);
+  $('gpu').textContent = `GPU: ${G.gpuName}. FP16 ${G.hasF16 ? 'supported' : 'not supported in this browser'}.`;
+
+  // ---- state: what every tile depends on ----
+  const randSeed = () => 1 + Math.floor(Math.random() * 999999);
+  let psi = Q.has('psi') ? clamp(+Q.get('psi') || 0, 0, 2) : 1;
+  let soft = Q.has('soft') ? clamp(+Q.get('soft') || 0, 0, 0.4) : 0.1;
+  let noiseSeed = Q.has('n') && Number.isInteger(+Q.get('n')) ? clamp(+Q.get('n'), 0, 999999) : randSeed();
+  let noiseStr = Q.has('ns') ? clamp(+Q.get('ns') || 0, 0, 2) : 1;
+  const makeNoise = () => { const n = gauss(G.N, noiseSeed); for (let i = 0; i < n.length; i++) n[i] *= noiseStr; return n; };
+  let NOISE = makeNoise();
+  const unit = (v) => { const r = Math.hypot(...v) || 1; return v.map((x) => x / r); };
+  // The noise point: a unit vector, the point of the noise globe facing the viewer.
+  let P = Q.has('p') ? unit(Q.get('p').split(',').map(Number)) : [0, 0, 1];
+  if (!P.every(Number.isFinite)) P = [0, 0, 1];
+
+  // Per tile: its class mix (cached per cell), the mix's noise directions (cached per mix), its z.
+  let mixCache = new Array(N), dirCache = new Map();
+  const mixKey = (mix) => Object.keys(mix).map((k) => `${k}:${mix[k].toFixed(3)}`).join(',');
+  function dirsFor(mix) {
+    const key = mixKey(mix); let d = dirCache.get(key);
+    if (!d) { d = directions(mix, GF.axes, GF.R0); dirCache.set(key, d); if (dirCache.size > 20000) dirCache.delete(dirCache.keys().next().value); }
+    return d;
+  }
+  const centre = (i) => [g.centres[3 * i], g.centres[3 * i + 1], g.centres[3 * i + 2]];
+  const mixAt = (i) => (mixCache[i] ??= classMix(GF.points, centre(i), soft, blocked));
+  function tileInputs(i) { const mix = mixAt(i); return { z: tileZ(dirsFor(mix).V, P, psi), mix }; }
+
+  // ---- tile images: GPU texture arrays at 16, 64 and 256 px. Every tile made keeps a 16 px copy; 64 and 256 px keep
+  // the most recently made (LRU). A cell draws from the largest it has that its size on screen needs. ----
+  const SIDE = 2048;
+  function tier(px, layers) {
+    const per = SIDE / px, cap = per * per * layers;
+    const tex = dev.createTexture({ size: [SIDE, SIDE, layers], format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT });
+    return { px, per, cap, tex, slot: new Map(), owner: new Int32Array(cap).fill(-1), next: 0 };
+  }
+  const T16 = tier(16, Math.ceil(N / 16384)), T64 = tier(64, SMALL_DEVICE ? 2 : 8), T256 = tier(256, SMALL_DEVICE ? 2 : 8);
+  const TIERS = [T16, T64, T256];
+  function put(T, cell, bmp) {
+    let s = T.slot.get(cell);
+    if (s === undefined) {
+      s = T.next; T.next = (s + 1) % T.cap;
+      if (T.owner[s] >= 0) T.slot.delete(T.owner[s]);
+      T.owner[s] = cell; T.slot.set(cell, s);
+    }
+    const p2 = T.per * T.per, r = s % p2;
+    dev.queue.copyExternalImageToTexture({ source: bmp }, { texture: T.tex, origin: [(r % T.per) * T.px, Math.floor(r / T.per) * T.px, Math.floor(s / p2)] }, [T.px, T.px]);
+  }
+  const made = new Int32Array(N).fill(-1);  // the epoch each cell's images were made for (-1: none)
+  let epoch = 0;
+  function clearTiles() { for (const T of TIERS) { T.slot.clear(); T.owner.fill(-1); T.next = 0; } made.fill(-1); }
+  async function store(cell, img) {
+    const bmps = await Promise.all([16, 64].map((s) => createImageBitmap(img, { resizeWidth: s, resizeHeight: s, resizeQuality: 'high' })).concat(createImageBitmap(img)));
+    TIERS.forEach((T, t) => { put(T, cell, bmps[t]); bmps[t].close(); });
+  }
+
+  // ---- drawing ----
+  const cv = $('globe'), lc = $('labels'), lctx = lc.getContext('2d'), wrap = $('wrap');
+  const ctx = cv.getContext('webgpu'), fmtTex = navigator.gpu.getPreferredCanvasFormat();
+  ctx.configure({ device: dev, format: fmtTex, alphaMode: 'opaque' });
+  let dpr = 1, W = 0, H = 0;
+  const resize = () => { dpr = devicePixelRatio || 1; W = cv.width = lc.width = Math.round(wrap.clientWidth * dpr); H = cv.height = lc.height = Math.round(wrap.clientHeight * dpr); };
+  new ResizeObserver(resize).observe(wrap); resize();
+  const cellBuf = dev.createBuffer({ size: cellData.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  dev.queue.writeBuffer(cellBuf, 0, cellData);
+  const MAXI = Math.ceil(N / 2) + 1024;
+  const instBuf = dev.createBuffer({ size: MAXI * 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  const uniBuf = dev.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const shader = dev.createShaderModule({ code: `
+struct U { r0: vec4f, r1: vec4f, r2: vec4f, sc: vec4f };  // rotation rows; sc = (px per unit x, y in clip units, side)
+@group(0) @binding(0) var<uniform> u: U;
+@group(0) @binding(1) var<storage, read> cells: array<vec4f>;
+@group(0) @binding(2) var<storage, read> inst: array<vec4u>;     // cell, tier, slot, -
+@group(0) @binding(3) var smp: sampler;
+@group(0) @binding(4) var t16: texture_2d_array<f32>;
+@group(0) @binding(5) var t64: texture_2d_array<f32>;
+@group(0) @binding(6) var t256: texture_2d_array<f32>;
+struct O { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1) @interpolate(flat) ts: vec2u, @location(2) shade: f32 };
+fn rot(p: vec3f) -> vec3f { return vec3f(dot(u.r0.xyz, p), dot(u.r1.xyz, p), dot(u.r2.xyz, p)); }
+@vertex fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> O {
+  let it = inst[ii]; let b = it.x * 8u; let c4 = cells[b]; let c = rot(c4.xyz);
+  let tri = vi / 3u; let k = vi % 3u;
+  var q = c;
+  if (k == 1u) { q = rot(cells[b + 1u + tri].xyz); }
+  if (k == 2u) { q = rot(cells[b + 1u + (tri + 1u) % 6u].xyz); }
+  // the tile's upright frame on the surface: its top towards the top of the screen
+  var up = vec3f(0.0, 1.0, 0.0) - c.y * c;
+  if (length(up) < 1e-4) { up = vec3f(0.0, 0.0, 1.0) - c.z * c; }
+  up = normalize(up); let rt = cross(up, c); let d = q - c;
+  var o: O;
+  o.pos = vec4f(q.x * u.sc.x, q.y * u.sc.y, 0.5, 1.0);
+  o.uv = vec2f(0.5) + vec2f(dot(d, rt), -dot(d, up)) / (2.0 * c4.w);
+  o.ts = it.yz; o.shade = 0.55 + 0.45 * max(c.z, 0.0);
+  return o;
+}
+fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, and its layer
+  let per = u32(u.sc.z / px); let p2 = per * per; let r = s % p2;
+  let m = clamp(uv, vec2f(0.5 / px), vec2f(1.0 - 0.5 / px));
+  return vec3f((vec2f(f32(r % per), f32(r / per)) * px + m * px) / u.sc.z, f32(s / p2));
+}
+@fragment fn fs(i: O) -> @location(0) vec4f {
+  let a = at(16.0, i.ts.y, i.uv); let b = at(64.0, i.ts.y, i.uv); let c = at(256.0, i.ts.y, i.uv);
+  let x16 = textureSampleLevel(t16, smp, a.xy, i32(a.z), 0.0);
+  let x64 = textureSampleLevel(t64, smp, b.xy, i32(b.z), 0.0);
+  let x256 = textureSampleLevel(t256, smp, c.xy, i32(c.z), 0.0);
+  var col = x16;
+  if (i.ts.x == 1u) { col = x64; }
+  if (i.ts.x == 2u) { col = x256; }
+  return vec4f(col.rgb * i.shade, 1.0);
+}` });
+  const pipe = dev.createRenderPipeline({ layout: 'auto', vertex: { module: shader, entryPoint: 'vs' }, fragment: { module: shader, entryPoint: 'fs', targets: [{ format: fmtTex }] }, primitive: { topology: 'triangle-list' } });
+  const smp = dev.createSampler({ magFilter: 'linear', minFilter: 'linear' });
+  const bind = dev.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries: [
+    { binding: 0, resource: { buffer: uniBuf } }, { binding: 1, resource: { buffer: cellBuf } }, { binding: 2, resource: { buffer: instBuf } },
+    { binding: 3, resource: smp }, ...TIERS.map((T, t) => ({ binding: 4 + t, resource: T.tex.createView({ dimension: '2d-array' }) }))] });
+
+  // ---- view: rotation (3x3, rows) and zoom (CSS px per unit radius) ----
+  const facing = (zr) => {  // a rotation (rows) that brings unit vector zr to the front, upright
+    const a = Math.abs(zr[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+    const xr = unit([a[1] * zr[2] - a[2] * zr[1], a[2] * zr[0] - a[0] * zr[2], a[0] * zr[1] - a[1] * zr[0]]);
+    return [...xr, zr[1] * xr[2] - zr[2] * xr[1], zr[2] * xr[0] - zr[0] * xr[2], zr[0] * xr[1] - zr[1] * xr[0], ...zr];
+  };
+  // Start as the map does: at the golden retriever, at the map's starting zoom (84 CSS px per tile).
+  const gr = G.names.indexOf('golden retriever');
+  let Rm = facing([GF.points[3 * gr], GF.points[3 * gr + 1], GF.points[3 * gr + 2]]);
+  if (Q.has('rot')) { const r = Q.get('rot').split(',').map(Number); if (r.length === 9 && r.every(Number.isFinite)) Rm = r; }
+  const fitR = () => 0.42 * Math.min(wrap.clientWidth, wrap.clientHeight);
+  const meanRad = rad.reduce((s, x) => s + x, 0) / N;
+  let zoom = +Q.get('zoom') > 0 ? +Q.get('zoom') : (innerWidth < 600 ? 56 : 84) / (2 * meanRad);
+  const maxZoom = () => 300 / (2 * meanRad);  // a tile ~300 CSS px across
+  const mul = (A, B) => [0, 1, 2].flatMap((i) => [0, 1, 2].map((j) => A[3 * i] * B[j] + A[3 * i + 1] * B[3 + j] + A[3 * i + 2] * B[6 + j]));
+  function turn(ax, ay) {  // rotate the globe: ax about the screen's vertical axis, ay about its horizontal axis
+    const cy = Math.cos(ax), sy = Math.sin(ax), cx = Math.cos(ay), sx = Math.sin(ay);
+    Rm = mul(mul([1, 0, 0, 0, cx, -sx, 0, sx, cx], [cy, 0, sy, 0, 1, 0, -sy, 0, cy]), Rm);
+    // re-orthonormalise now and then against drift
+    const r0 = unit(Rm.slice(0, 3)), r1u = Rm.slice(3, 6), d = r1u.reduce((s, x, i) => s + x * r0[i], 0), r1 = unit(r1u.map((x, i) => x - d * r0[i]));
+    const r2 = [r0[1] * r1[2] - r0[2] * r1[1], r0[2] * r1[0] - r0[0] * r1[2], r0[0] * r1[1] - r0[1] * r1[0]];
+    Rm = [...r0, ...r1, ...r2];
+  }
+  const pointers = new Map(); let pinch = 0;
+  cv.addEventListener('pointerdown', (e) => { cv.setPointerCapture(e.pointerId); pointers.set(e.pointerId, [e.clientX, e.clientY]); cv.classList.add('drag'); });
+  cv.addEventListener('pointermove', (e) => {
+    const p = pointers.get(e.pointerId); if (!p) return;
+    if (pointers.size === 2) {
+      const [a, b] = [...pointers.values()], d0 = Math.hypot(a[0] - b[0], a[1] - b[1]); pointers.set(e.pointerId, [e.clientX, e.clientY]);
+      const [c, dd] = [...pointers.values()], d1 = Math.hypot(c[0] - dd[0], c[1] - dd[1]);
+      if (d0 > 0) zoom = clamp(zoom * d1 / d0, fitR() * 0.5, maxZoom());
+      return;
+    }
+    turn((e.clientX - p[0]) / zoom, (e.clientY - p[1]) / zoom); pointers.set(e.pointerId, [e.clientX, e.clientY]);
+  });
+  const up = (e) => { pointers.delete(e.pointerId); if (!pointers.size) cv.classList.remove('drag'); };
+  cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
+  cv.addEventListener('wheel', (e) => { e.preventDefault(); zoom = clamp(zoom * Math.exp(-e.deltaY * 0.0015), fitR() * 0.5, maxZoom()); }, { passive: false });
+  addEventListener('keydown', (e) => {
+    if (e.target.closest && e.target.closest('input, select, textarea')) return;
+    const a = 0.3 * fitR() / zoom;
+    if (e.key === 'ArrowLeft') turn(-a, 0); else if (e.key === 'ArrowRight') turn(a, 0);
+    else if (e.key === 'ArrowUp') turn(0, -a); else if (e.key === 'ArrowDown') turn(0, a);
+    else if (e.key === 'h' || e.key === 'H') setRail(!railOpen);
+    else return;
+    e.preventDefault();
+  });
+
+  // ---- generation: the tiles in view that lack an image for this epoch (or a large enough one), nearest the centre
+  // first, as many in flight as the lab has slots ----
+  let inflight = 0, madeN = 0, want = [], switching = false, fails = 0;
+  const pending = new Set();
+  function pump() {
+    if (switching || G.lost || document.hidden) return;
+    while (inflight < G.slots && want.length) {
+      const cell = want.shift(); if (pending.has(cell)) continue;
+      pending.add(cell); inflight++;
+      const ep = epoch, { z, mix } = tileInputs(cell), c = Float32Array.from(G.classVec(mix));
+      G.generate(z, c, NOISE)
+        .then((img) => (ep === epoch ? store(cell, img).then(() => { made[cell] = ep; madeN++; fails = 0; }) : null))
+        .catch((e) => { console.error(e); if (++fails > 6) { switching = true; $('cfgnote').textContent = `Tiles are failing to generate: ${e.message || e}`; } })
+        .finally(() => { pending.delete(cell); inflight--; pump(); });
+    }
+  }
+  function remake() { epoch++; want = []; }  // new inputs: every tile is made again; old images show until replaced
+
+  // ---- the frame ----
+  const inst = new Uint32Array(MAXI * 4); let drawn = 0, inView = 0, centreCell = -1;
+  function frame() {
+    const S = zoom * dpr, sx = 2 * S / W, sy = 2 * S / H;
+    dev.queue.writeBuffer(uniBuf, 0, new Float32Array([...Rm.slice(0, 3), 0, ...Rm.slice(3, 6), 0, ...Rm.slice(6, 9), 0, sx, sy, SIDE, 0]));
+    const cand = []; let n = 0, best = -2; inView = 0;
+    const hw = W / 2, hh = H / 2;
+    for (let i = 0; i < N; i++) {
+      const x = g.centres[3 * i], y = g.centres[3 * i + 1], zc = g.centres[3 * i + 2];
+      const vz = Rm[6] * x + Rm[7] * y + Rm[8] * zc; if (vz <= 0) continue;
+      const vx = (Rm[0] * x + Rm[1] * y + Rm[2] * zc) * S, vy = (Rm[3] * x + Rm[4] * y + Rm[5] * zc) * S, rp = rad[i] * S;
+      if (Math.abs(vx) > hw + rp || Math.abs(vy) > hh + rp) continue;
+      inView++;
+      if (vz > best) { best = vz; centreCell = i; }  // the point facing the viewer
+      const cellPx = 2 * rp, need = cellPx > 100 ? 2 : cellPx > 24 ? 1 : 0;
+      const have = T256.slot.has(i) && need >= 2 ? 2 : T64.slot.has(i) && need >= 1 ? 1 : T16.slot.has(i) ? 0 : -1;
+      if (have >= 0 && n < MAXI) { const s = TIERS[have].slot.get(i); inst[4 * n] = i; inst[4 * n + 1] = have; inst[4 * n + 2] = s; n++; }
+      if ((made[i] !== epoch || have < need) && !pending.has(i)) cand.push([vx * vx + vy * vy, i]);
+    }
+    drawn = n;
+    if (n) dev.queue.writeBuffer(instBuf, 0, inst, 0, 4 * n);
+    const enc = dev.createCommandEncoder();
+    const pass = enc.beginRenderPass({ colorAttachments: [{ view: ctx.getCurrentTexture().createView(), clearValue: [0, 0, 0, 1], loadOp: 'clear', storeOp: 'store' }] });
+    if (n) { pass.setPipeline(pipe); pass.setBindGroup(0, bind); pass.draw(18, n); }
+    pass.end(); dev.queue.submit([enc.finish()]);
+    cand.sort((a, b) => a[0] - b[0]); want = cand.slice(0, 256).map((c) => c[1]);
+    pump();
+    drawLabels(S);
+    showStats();
+    window.__globe = { drawn, inView, made: madeN, model: G.model, rot: Rm.slice(), zoom, p: P.slice(), epoch, psi, mini: miniImg.filter(Boolean).length };
+    requestAnimationFrame(frame);
+  }
+
+  // Class names: at the class's point, once regions are large enough on screen to hold them.
+  function drawLabels(S) {
+    lctx.clearRect(0, 0, W, H);
+    lctx.strokeStyle = 'rgba(255,255,255,0.25)'; lctx.lineWidth = dpr;  // the globe's edge, before its tiles are made
+    lctx.beginPath(); lctx.arc(W / 2, H / 2, S, 0, 2 * Math.PI); lctx.stroke();
+    if (SPACING * S < 120 * dpr) return;
+    lctx.font = `600 ${13 * dpr}px system-ui, sans-serif`; lctx.textAlign = 'center'; lctx.textBaseline = 'middle';
+    const pts = GF.points;
+    for (let c = 0; c < 1000; c++) {
+      if (blocked.has(c)) continue;
+      const x = pts[3 * c], y = pts[3 * c + 1], zc = pts[3 * c + 2];
+      const vz = Rm[6] * x + Rm[7] * y + Rm[8] * zc; if (vz < 0.3) continue;
+      const px = W / 2 + (Rm[0] * x + Rm[1] * y + Rm[2] * zc) * S, py = H / 2 - (Rm[3] * x + Rm[4] * y + Rm[5] * zc) * S;
+      if (px < 0 || px > W || py < 0 || py > H) continue;
+      const t = G.names[c], tw = lctx.measureText(t).width + 14 * dpr, th = 20 * dpr;
+      lctx.fillStyle = 'rgba(33,37,41,0.78)'; lctx.beginPath(); lctx.roundRect(px - tw / 2, py - th / 2, tw, th, th / 2); lctx.fill();
+      lctx.fillStyle = '#fff'; lctx.fillText(t, px, py + 0.5 * dpr);
+    }
+  }
+
+  // ---- readout ----
+  let lastStats = 0;
+  function showStats() {
+    const now = performance.now(); if (now - lastStats < 250) return; lastStats = now;
+    let rows = `<div class="head">${fmt(drawn)} of ${fmt(inView)} tiles in view shown</div><div>${fmt(madeN)} made</div>`;
+    if (centreCell >= 0) {
+      const mix = mixAt(centreCell), top = Object.keys(mix).sort((a, b) => mix[b] - mix[a])[0], d = dirsFor(mix);
+      rows += `<div class="cap">Centre: ${G.names[top]}. These 3 noise directions carry ${Math.round(100 * d.share)}% of the variation here${psi !== 1 ? ' (measured at ψ = 1)' : ''}.</div>`;
+    }
+    $('stats').innerHTML = rows;
+  }
+
+  // ---- settings ----
+  function showConfig() {
+    const o = G.options;
+    document.querySelectorAll('.mbtn').forEach((b) => { b.setAttribute('aria-pressed', String(b.dataset.m === G.model)); b.disabled = !avail[b.dataset.m] || switching; });
+    $('th16').checked = o.half && G.hasF16; $('th16').disabled = !G.hasF16 || switching;
+    $('gh16').checked = o.gHalf && G.hasF16; $('gh16').disabled = !G.hasF16 || switching;
+    $('trunc').value = psi; $('truncv').textContent = psi === 1 ? '1 (as trained)' : psi.toFixed(2);
+    $('soft').value = soft; $('softv').textContent = soft === 0 ? 'hard' : soft.toFixed(2);
+    if (document.activeElement !== $('nseed')) $('nseed').value = noiseSeed;
+    $('nstr').value = noiseStr; $('nstrv').textContent = noiseStr === 1 ? '1 (as trained)' : String(noiseStr);
+    $('faith').textContent = `On average ${(10 * GF.n10).toFixed(1)} of each class’s 10 nearest classes in the model are among its 10 nearest here. Neighbourhoods survive the flattening onto a globe; long distances do not.`;
+  }
+  let lastURL = 0;
+  function writeURL() {
+    const now = performance.now(); if (now - lastURL < 500) return; lastURL = now;
+    const q = new URLSearchParams(location.search), r = (x) => +x.toFixed(4);
+    q.set('m', G.model); q.set('n', noiseSeed); q.set('ns', noiseStr); q.set('soft', soft);
+    if (psi !== 1) q.set('psi', psi); else q.delete('psi');
+    q.set('rot', Rm.map(r).join(',')); q.set('zoom', Math.round(zoom)); q.set('p', P.map(r).join(','));
+    q.set('h16', G.options.half ? 1 : 0); q.set('g16', G.options.gHalf ? 1 : 0);
+    history.replaceState(null, '', `${location.pathname}?${q}`);
+  }
+  setInterval(writeURL, 600);
+  async function configure(change) {
+    switching = true; showConfig();
+    try { await change(); $('cfgnote').textContent = ''; } catch (e) { console.error(e); $('cfgnote').textContent = `That change failed: ${e.message || e}`; }
+    fails = 0; switching = false; showConfig(); pump();
+  }
+  document.querySelectorAll('.mbtn').forEach((b) => b.onclick = () => {
+    if (b.dataset.m === G.model || b.disabled) return;
+    configure(async () => {
+      const files = await globeFiles(b.dataset.m); await G.setModel(b.dataset.m);
+      GF = files; mixCache = new Array(N); dirCache = new Map(); epoch++; clearTiles();
+      for (const c of Object.keys(MODELS)) document.querySelector(`.segsub [data-m="${c}"]`).textContent = '';
+    });
+  });
+  $('th16').onchange = () => configure(async () => { await G.setOptions({ half: $('th16').checked }); remake(); });
+  $('gh16').onchange = () => configure(async () => { await G.setOptions({ gHalf: $('gh16').checked }); remake(); });
+  $('trunc').oninput = () => { psi = +$('trunc').value; remake(); showConfig(); };
+  $('soft').oninput = () => { soft = +$('soft').value; mixCache = new Array(N); remake(); showConfig(); };
+  $('nstr').oninput = () => { noiseStr = +$('nstr').value; NOISE = makeNoise(); remake(); showConfig(); };
+  $('nseed').onchange = () => { noiseSeed = clamp(Math.round(+$('nseed').value) || 0, 0, 999999); NOISE = makeNoise(); remake(); showConfig(); };
+  $('newn').onclick = () => { noiseSeed = randSeed(); NOISE = makeNoise(); remake(); showConfig(); };
+  for (const c of Object.keys(MODELS)) {
+    const el = document.querySelector(`.segsub [data-m="${c}"]`);
+    el.textContent = !avail[c] ? 'not available' : (await savedInBrowser(weightsFile(c))) ? 'cached weights' : `${MODELS[c].mb} MB download`;
+  }
+  showConfig();
+
+  // ---- the noise globe (minimap) ----
+  const mini = $('mini'), mctx = mini.getContext('2d');
+  let Mm = [1, 0, 0, 0, 1, 0, 0, 0, 1];  // its rotation; P is the point facing the viewer: Mm's third row
+  if (Q.has('p')) Mm = facing(P);
+  let mdrag = null;
+  mini.addEventListener('pointerdown', (e) => { mini.setPointerCapture(e.pointerId); mdrag = [e.clientX, e.clientY]; });
+  mini.addEventListener('pointermove', (e) => {
+    if (!mdrag) return;
+    const r = mini.clientWidth / 2, ax = (e.clientX - mdrag[0]) / r, ay = (e.clientY - mdrag[1]) / r; mdrag = [e.clientX, e.clientY];
+    const cy = Math.cos(ax), sy = Math.sin(ax), cx = Math.cos(ay), sx = Math.sin(ay);
+    Mm = mul(mul([1, 0, 0, 0, cx, -sx, 0, sx, cx], [cy, 0, sy, 0, 1, 0, -sy, 0, cy]), Mm);
+    const r0 = unit(Mm.slice(0, 3)), r1u = Mm.slice(3, 6), d = r1u.reduce((s, x, i) => s + x * r0[i], 0), r1 = unit(r1u.map((x, i) => x - d * r0[i]));
+    Mm = [...r0, ...r1, r0[1] * r1[2] - r0[2] * r1[1], r0[2] * r1[0] - r0[0] * r1[2], r0[0] * r1[1] - r0[1] * r1[0]];
+    P = Mm.slice(6, 9); remake();
+  });
+  const mup = () => { mdrag = null; }; mini.addEventListener('pointerup', mup); mini.addEventListener('pointercancel', mup);
+  function drawMini() {
+    const s = mini.clientWidth * dpr; if (mini.width !== s) { mini.width = mini.height = s; }
+    const r = s / 2 - 2 * dpr; mctx.clearRect(0, 0, s, s);
+    const gr = mctx.createRadialGradient(s / 2 - r / 3, s / 2 - r / 3, r / 10, s / 2, s / 2, r);
+    gr.addColorStop(0, '#3a4a66'); gr.addColorStop(1, '#0e1420');
+    mctx.fillStyle = gr; mctx.beginPath(); mctx.arc(s / 2, s / 2, r, 0, 2 * Math.PI); mctx.fill();
+    // a coordinate grid fixed to the noise globe, so its turning shows
+    mctx.strokeStyle = 'rgba(255,255,255,0.28)'; mctx.lineWidth = dpr;
+    const line = (f) => { mctx.beginPath(); let on = false;
+      for (let t = 0; t <= 96; t++) { const p = f(2 * Math.PI * t / 96), vz = Mm[6] * p[0] + Mm[7] * p[1] + Mm[8] * p[2];
+        const x = s / 2 + r * (Mm[0] * p[0] + Mm[1] * p[1] + Mm[2] * p[2]), y = s / 2 - r * (Mm[3] * p[0] + Mm[4] * p[1] + Mm[5] * p[2]);
+        if (vz > 0) { if (on) mctx.lineTo(x, y); else mctx.moveTo(x, y); on = true; } else on = false; }
+      mctx.stroke(); };
+    for (let k = 1; k < 6; k++) { const la = Math.PI * (k / 6 - 0.5); line((t) => [Math.cos(la) * Math.cos(t), Math.sin(la), Math.cos(la) * Math.sin(t)]); }
+    for (let k = 0; k < 6; k++) { const lo = Math.PI * k / 6; line((t) => [Math.cos(t) * Math.cos(lo), Math.sin(t), Math.cos(t) * Math.sin(lo)]); }
+    // its tiles, once made: the noise globe of the class at the main view's centre, drawn upright, back to front
+    const order = [];
+    for (let i = 0; i < mg.n; i++) {
+      if (!miniImg[i]) continue;
+      const x = mg.centres[3 * i], y = mg.centres[3 * i + 1], zc = mg.centres[3 * i + 2], vz = Mm[6] * x + Mm[7] * y + Mm[8] * zc;
+      if (vz > 0.05) order.push([vz, s / 2 + r * (Mm[0] * x + Mm[1] * y + Mm[2] * zc), s / 2 - r * (Mm[3] * x + Mm[4] * y + Mm[5] * zc), i]);
+    }
+    order.sort((a, b) => a[0] - b[0]);
+    for (const [vz, x, y, i] of order) { const h = 0.2 * r * Math.sqrt(vz); mctx.globalAlpha = 0.35 + 0.65 * vz; mctx.drawImage(miniImg[i], x - h / 2, y - h / 2, h, h); }
+    mctx.globalAlpha = 1;
+    mctx.strokeStyle = '#E8B04A'; mctx.lineWidth = 2 * dpr; mctx.beginPath(); mctx.arc(s / 2, s / 2, 6 * dpr, 0, 2 * Math.PI); mctx.stroke();
+    requestAnimationFrame(drawMini);
+  }
+  // The minimap's tiles are made only when the main globe has nothing to do: they differ little from each other, so they
+  // are a backdrop, not a priority. 162 points of the noise sphere, for the class mix at the main view's centre.
+  const mg = geodesic(2); let miniImg = [], miniKey = '', miniBusy = false;
+  setInterval(() => {
+    if (miniBusy || switching || G.lost || inflight || want.length || centreCell < 0) return;
+    const mix = mixAt(centreCell), key = [mixKey(mix), psi, noiseSeed, noiseStr, G.model, G.options.half, G.options.gHalf].join('|');
+    if (key !== miniKey) { miniKey = key; miniImg.forEach((b) => b && b.close()); miniImg = []; }
+    const i = [...Array(mg.n).keys()].find((k) => !miniImg[k]); if (i === undefined) return;
+    miniBusy = true;
+    const q = [mg.centres[3 * i], mg.centres[3 * i + 1], mg.centres[3 * i + 2]];
+    G.generate(tileZ(dirsFor(mix).V, q, psi), Float32Array.from(G.classVec(mix)), NOISE)
+      .then((img) => createImageBitmap(img, { resizeWidth: 32, resizeHeight: 32, resizeQuality: 'high' }))
+      .then((b) => { if (key === miniKey) miniImg[i] = b; else b.close(); })
+      .catch((e) => console.error(e)).finally(() => { miniBusy = false; });
+  }, 50);
+  requestAnimationFrame(drawMini);
+  requestAnimationFrame(frame);
+}
+main().catch((e) => { console.error(e); document.getElementById('status').textContent = e.message || String(e); });
+</script>
+</body>
+</html>
