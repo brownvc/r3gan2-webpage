@@ -708,12 +708,18 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
   // tiles; a drag on the minimap turns Dm and Vm together, so it keeps them all). Every tile, back included, gets its
   // Conv-decoded latent (32 px, cheap), 3 at a time even while the class globe has work, so the minimap is whole
   // and can be spun at once; a tile is decoded with TAEF2 only when the class globe has nothing to do. Front first;
-  // old tiles stay drawn until replaced.
-  const miniOf = [], miniDec = [], miniPend = new Set(), MINI_SLOTS = 3;
+  // old tiles stay drawn until replaced. While the class globe turns, the minimap holds what it has: a new key (class or
+  // noise) is taken only once it has stayed the same for SETTLE_MS, so a spin across classes causes one switch, not many.
+  const miniOf = [], miniDec = [], miniPend = new Set(), MINI_SLOTS = 3, SETTLE_MS = 400;
+  let nextKey = '', nextSince = 0;
   function miniPump() {
     if (held || switching || G.lost || centreCell < 0 || miniPend.size >= MINI_SLOTS) return;
     const H = mul(tr(Dm), Vm), mix = mixAt(centreCell);
     const key = [mixKey(mix), psi, noiseSeed, noiseStr, G.model, G.options.half, G.options.gHalf, H.map((x) => Math.round(x * 20)).join()].join('|');
+    if (key !== miniKey) {
+      if (key !== nextKey) { nextKey = key; nextSince = performance.now(); }
+      if (performance.now() - nextSince < SETTLE_MS) return;
+    }
     miniKey = key;
     const mk = mixKey(mix);
     if (mk !== miniMix) {

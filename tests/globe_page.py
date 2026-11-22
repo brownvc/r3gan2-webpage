@@ -84,6 +84,14 @@ with sync_playwright() as p:
     pg.keyboard.press('p'); pg.wait_for_timeout(2500); check(pg.evaluate(f'{G}.made') > m1, 'P again resumes')
     pg.goto(URL, wait_until='load'); pg.wait_for_function(f'{G} && {G}.drawn >= 50', timeout=180000); pg.wait_for_timeout(500)
     cap = pg.inner_text('#minicap'); check('golden retriever' in cap, f'the noise globe names its class: {cap!r}')
+    # spinning the class globe across classes: the noise globe holds still (no class switches, no fades) until it settles
+    pg.goto(URL + '&zoom=2500', wait_until='load'); pg.wait_for_function(f'{G} && {G}.drawn >= 50', timeout=180000); pg.wait_for_timeout(1500)
+    caps = [pg.inner_text('#minicap')]; bb = pg.locator('#globe').bounding_box(); x, y = bb['x'] + 100, bb['y'] + bb['height'] / 2
+    pg.mouse.move(x, y); pg.mouse.down()
+    for k in range(1, 31): pg.mouse.move(x + 25 * k, y); pg.wait_for_timeout(50); caps.append(pg.inner_text('#minicap')) if k % 3 == 0 else None
+    pg.wait_for_timeout(150); pg.mouse.up(); pg.wait_for_timeout(1500); after = pg.inner_text('#minicap')
+    check(len(set(caps)) == 1, f'while the class globe turns, the noise globe keeps its class: {sorted(set(caps))}')
+    check(after != caps[0], f'once it settles, the noise globe takes the new class: {caps[0]!r} -> {after!r}')
     # a flick keeps either globe turning after the release
     def flick(sel, key):
         bb = pg.locator(sel).bounding_box(); x, y = bb['x'] + bb['width'] / 2, bb['y'] + bb['height'] / 2
