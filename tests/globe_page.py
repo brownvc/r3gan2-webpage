@@ -23,13 +23,14 @@ with sync_playwright() as p:
     pg.wait_for_function(f'{G} && {G}.inView > 0 && {G}.drawn >= {G}.inView', timeout=180000)
     s = pg.evaluate(G); check(s['drawn'] >= s['inView'] > 20, f"tiles drawn: {s['drawn']} of {s['inView']} in view")
     box = pg.locator('#globe').bounding_box(); cx, cy = box['x'] + box['width'] / 2, box['y'] + box['height'] / 2
-    r0 = pg.evaluate(f'{G}.rot')
+    r0, f0 = pg.evaluate(f'{G}.rot'), pg.evaluate(f'{G}.miniFront')
     pg.mouse.move(cx, cy); pg.mouse.down(); pg.mouse.move(cx + 80, cy + 30, steps=8); pg.mouse.up(); pg.wait_for_timeout(200)
     check(pg.evaluate(f'{G}.rot') != r0, 'a drag turns the globe')
-    r1 = pg.evaluate(f'{G}.rot'); pg.keyboard.press('ArrowLeft'); pg.wait_for_timeout(100)
+    r1 = pg.evaluate(f'{G}.rot'); pg.keyboard.press('ArrowLeft'); pg.wait_for_timeout(300)
     check(pg.evaluate(f'{G}.rot') != r1, 'an arrow key turns the globe')
-    mk, qc = pg.evaluate(f'{G}.marker'), pg.evaluate(f'{G}.qCentre')
-    check(mk is not None and qc is not None and abs(mk[0] - qc[0]) < 1e-6 and abs(mk[1] - qc[1]) < 1e-6, f'the minimap marker sits at the centre tile’s noise point: {mk} vs {qc}')
+    f1, nc = pg.evaluate(f'{G}.miniFront'), pg.evaluate(f'{G}.noiseCentre')
+    check(f0 is not None and f1 is not None and max(abs(a - b) for a, b in zip(f0, f1)) > 1e-3, f'turning the class globe turns the noise globe: {f0} -> {f1}')
+    check(nc is not None and max(abs(a - b) for a, b in zip(f1, nc)) < 1e-3, f'the noise globe faces the noise at the view centre: {f1} vs {nc}')
     txt = pg.inner_text('#stats'); check('noise directions carry' in txt and '%' in txt, f'readout: {txt!r}')
     # the noise minimap: spinning it moves p, starts a new epoch, and the tiles in view are made again
     s0 = pg.evaluate(G); mb = pg.locator('#mini').bounding_box(); mx, my = mb['x'] + mb['width'] / 2, mb['y'] + mb['height'] / 2
@@ -41,6 +42,15 @@ with sync_playwright() as p:
     check(s2['made'] > s1['made'] and s2['epoch'] == s1['epoch'], f"after the spin, {s2['made'] - s1['made']} tiles made for the last point only")
     pg.wait_for_timeout(800)
     pg.wait_for_function(f'{G}.mini >= 5', timeout=60000); check(pg.evaluate(f'{G}.mini') >= 5, f"minimap tiles made once the view is done: {pg.evaluate(f'{G}.mini')}")
+    # the minimap's tiles wrap its sphere as the main globe's do: once all are made, little of the bare sphere shows
+    pg.wait_for_function(f'{G}.mini >= {G}.miniN', timeout=180000); pg.wait_for_timeout(200)
+    bare = pg.evaluate('''() => { const m = document.getElementById('mini'), s = m.width, r = s / 2 - 2 * devicePixelRatio;
+      const a = m.getContext('2d').getImageData(0, 0, s, s).data;
+      const o = new OffscreenCanvas(s, s).getContext('2d'), gr = o.createRadialGradient(s / 2 - r / 3, s / 2 - r / 3, r / 10, s / 2, s / 2, r);
+      gr.addColorStop(0, '#3a4a66'); gr.addColorStop(1, '#0e1420'); o.fillStyle = gr; o.fillRect(0, 0, s, s); const b = o.getImageData(0, 0, s, s).data;
+      let n = 0, k = 0; for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) { if (Math.hypot(x - s / 2, y - s / 2) > 0.8 * r) continue; n++; const i = 4 * (y * s + x);
+        if (Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]) < 12) k++; } return k / n; }''')
+    check(bare < 0.03, f'the minimap tiles cover its sphere: {bare:.1%} bare inside 0.8 r')
     url = pg.url; check('p=' in url, 'the link carries p')
     if SHOT: pg.screenshot(path=SHOT)
     pg2 = c.new_page(); pg2.on('pageerror', lambda e: errors.append(str(e))); pg2.goto(url, wait_until='load')
@@ -57,6 +67,13 @@ with sync_playwright() as p:
         pg.wait_for_function(f"{G}.model === 'm' && {G}.drawn >= 50", timeout=300000)
         check(pg.evaluate(f'{G}.model') == 'm', 'model switch to M: tiles made again')
     else: print('skip  model switch (M not available)')
+    # loading: a data folder given without its trailing slash, and no data parameter (the files next to the page)
+    base = URL.split('globe.html')[0]
+    for u in (base + 'globe.html?data=.', base + 'globe.html'):
+        pg.goto(u, wait_until='load')
+        try: pg.wait_for_function(f'{G} && {G}.drawn >= 50', timeout=120000); ok = True
+        except Exception: ok = False
+        check(ok, f'loads: {u} ({pg.inner_text("#status")!r})')
     check(not [e for e in errors if 'favicon' not in e], f'no console errors: {errors[:3]}')
     c.close(); b.close()
 print('all passed' if not check.failed else f'{check.failed} failed'); sys.exit(1 if check.failed else 0)
