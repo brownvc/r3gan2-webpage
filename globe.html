@@ -190,7 +190,7 @@
 
 <script type="module">
 import { createLab, MODELS, weightsFile, fileExists, savedInBrowser, gauss, Z, fmt, SMALL_DEVICE } from './lab.js?v=20261121a';
-import { geodesic, classMix, directions, tileZ, noiseField, noisePoint, tierFor } from './globe.js?v=20261122g';
+import { geodesic, classMix, directions, tileZ, noiseField, noisePoint, tierFor, neighbours, gridTargets } from './globe.js?v=20261122h';
 const $ = (id) => document.getElementById(id);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 // Left out, as on the map: clothing classes whose training photos are mostly people in swimwear or underwear.
@@ -328,10 +328,14 @@ async function main() {
   dev.queue.writeBuffer(cellBuf, 0, cellData);
   const MAXI = Math.ceil(N / 2) + 1024;
   const instBuf = dev.createBuffer({ size: MAXI * 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
-  const uniBuf = dev.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const uniBuf = dev.createBuffer({ size: 80, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const morphBuf = dev.createBuffer({ size: MAXI * 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
   const shader = dev.createShaderModule({ code: `
-struct U { r0: vec4f, r1: vec4f, r2: vec4f, sc: vec4f };  // rotation rows; sc = (px per unit x, y in clip units, side)
+// rotation rows; sc = (px per unit x, y in clip units, side); gr = the grid's row direction on screen and its cells'
+// half width and half height (unit-sphere units)
+struct U { r0: vec4f, r1: vec4f, r2: vec4f, sc: vec4f, gr: vec4f };
 @group(0) @binding(0) var<uniform> u: U;
+@group(0) @binding(7) var<storage, read> morph: array<vec4f>;  // per instance: its grid place (x, y), how far reshaped
 @group(0) @binding(1) var<storage, read> cells: array<vec4f>;
 @group(0) @binding(2) var<storage, read> inst: array<vec4u>;     // cell, tier, slot, -
 @group(0) @binding(3) var smp: sampler;
@@ -350,9 +354,26 @@ fn rot(p: vec3f) -> vec3f { return vec3f(dot(u.r0.xyz, p), dot(u.r1.xyz, p), dot
   var up = vec3f(0.0, 1.0, 0.0) - c.y * c;
   if (length(up) < 1e-4) { up = vec3f(0.0, 0.0, 1.0) - c.z * c; }
   up = normalize(up); let rt = cross(up, c); let d = q - c;
+  var p = q.xy; var uv = vec2f(0.5) + vec2f(dot(d, rt), -dot(d, up)) / (2.0 * c4.w);
+  // close in: the hexagon reshapes into its grid rectangle. Its corners lie between its neighbours (30, 90, 150...
+  // degrees from the row direction): the four diagonal ones go to the rectangle's corners, the two across the row to
+  // its top and bottom middles; the image goes to the whole rectangle (the full width, cropped top and bottom).
+  let m = morph[ii];
+  if (m.z > 0.0) {
+    let e = u.gr.xy; let f = vec2f(-e.y, e.x); let T = m.xy;
+    var s = T;
+    if (k != 0u) {
+      let dd = q.xy - c.xy; let a = dot(dd, e) / max(length(dd), 1e-9); let sb = select(-1.0, 1.0, dot(dd, f) > 0.0);
+      if (abs(a) < 0.25) { s = T + sb * u.gr.w * f; } else { s = T + sign(a) * u.gr.z * e + sb * u.gr.w * f; }
+    }
+    let uvs = vec2f(0.5) + vec2f(dot(s - T, e), -dot(s - T, f)) / (2.0 * u.gr.z);
+    p = mix(p, s, m.z); uv = mix(uv, uvs, m.z);
+    // midway, neighbours' shared corners go different ways: each cell grows a little about its centre, so they overlap
+    let cm = mix(c.xy, T, m.z); p = cm + (p - cm) * (1.0 + 0.3 * sin(3.14159265 * m.z));
+  }
   var o: O;
-  o.pos = vec4f(q.x * u.sc.x, q.y * u.sc.y, 0.5, 1.0);
-  o.uv = vec2f(0.5) + vec2f(dot(d, rt), -dot(d, up)) / (2.0 * c4.w);
+  o.pos = vec4f(p.x * u.sc.x, p.y * u.sc.y, 0.5, 1.0);
+  o.uv = uv;
   o.ts = it.yz; o.shade = 0.55 + 0.45 * max(c.z, 0.0);
   return o;
 }
@@ -375,7 +396,8 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
   const smp = dev.createSampler({ magFilter: 'linear', minFilter: 'linear' });
   const bind = dev.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries: [
     { binding: 0, resource: { buffer: uniBuf } }, { binding: 1, resource: { buffer: cellBuf } }, { binding: 2, resource: { buffer: instBuf } },
-    { binding: 3, resource: smp }, ...TIERS.map((T, t) => ({ binding: 4 + t, resource: T.tex.createView({ dimension: '2d-array' }) }))] });
+    { binding: 3, resource: smp }, ...TIERS.map((T, t) => ({ binding: 4 + t, resource: T.tex.createView({ dimension: '2d-array' }) })),
+    { binding: 7, resource: { buffer: morphBuf } }] });
 
   // ---- view: rotation (3x3, rows) and zoom (CSS px per unit radius) ----
   const facing = (zr) => {  // a rotation (rows) that brings unit vector zr to the front, upright
@@ -472,10 +494,15 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
 
   // ---- the frame ----
   const inst = new Uint32Array(MAXI * 4), CAPS = TIERS.map((T, t) => (t ? T.cap : Infinity)); let drawn = 0, inView = 0, lastInView = 0, centreCell = -1;
+  // Close in, the cells reshape into a rectangular grid (gridTargets): fully from 200 CSS px tiles, not at all under 110,
+  // smoothly between. gst keeps the cells' grid places from frame to frame.
+  const NB = neighbours(g), morphArr = new Float32Array(MAXI * 4); let gst = {}, morphT = 0, gridded = 0;
+  const smooth = (x) => { const t = clamp(x, 0, 1); return t * t * (3 - 2 * t); };
   function frame() {
     globeFling.step();
     const S = zoom * dpr, sx = 2 * S / W, sy = 2 * S / H;
-    dev.queue.writeBuffer(uniBuf, 0, new Float32Array([...Rm.slice(0, 3), 0, ...Rm.slice(3, 6), 0, ...Rm.slice(6, 9), 0, sx, sy, SIDE, 0]));
+    morphT = smooth((2 * meanRad * zoom - 110) / 90);
+    const vis = morphT > 0 ? [] : null, vpos = morphT > 0 ? new Map() : null;
     const cand = []; let n = 0, best = -2; inView = 0;
     const hw = W / 2, hh = H / 2;
     for (let i = 0; i < N; i++) {
@@ -484,14 +511,29 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
       const vx = (Rm[0] * x + Rm[1] * y + Rm[2] * zc) * S, vy = (Rm[3] * x + Rm[4] * y + Rm[5] * zc) * S, rp = rad[i] * S;
       if (Math.abs(vx) > hw + rp || Math.abs(vy) > hh + rp) continue;
       inView++;
+      if (vis) { vis.push(i); vpos.set(i, [vx, vy]); }
       if (vz > best) { best = vz; centreCell = i; }  // the point facing the viewer
       const cellPx = 2 * rp, need = tierFor(cellPx, lastInView, CAPS);
       const have = T256.slot.has(i) && need >= 2 ? 2 : T64.slot.has(i) && need >= 1 ? 1 : T16.slot.has(i) ? 0 : -1;
       if (have >= 0 && n < MAXI) { const s = TIERS[have].slot.get(i); inst[4 * n] = i; inst[4 * n + 1] = have; inst[4 * n + 2] = s; n++; }
       if ((made[i] !== epoch || have < need) && !pending.has(i)) cand.push([vx * vx + vy * vy, i]);
     }
-    drawn = n; lastInView = inView;
-    if (n) dev.queue.writeBuffer(instBuf, 0, inst, 0, 4 * n);
+    drawn = n; lastInView = inView; gridded = 0;
+    let gr = [1, 0, 0, 0];
+    if (vis && centreCell >= 0) {
+      const tg = gridTargets(vis, vpos, NB, gst, centreCell), L = Math.hypot(...gst.e1);
+      // the view rolls (about its own axis) towards level rows, as fast as the morph has set in; the next frame's
+      // positions follow
+      const th = Math.atan2(gst.e1[1], gst.e1[0]);
+      if (Math.abs(th) > 1e-4) { const a = -th * Math.min(1, 0.2 * morphT), c = Math.cos(a), s = Math.sin(a); Rm = mul([c, -s, 0, s, c, 0, 0, 0, 1], Rm); }
+      gr = [gst.e1[0] / L, gst.e1[1] / L, 0.5 * L / S, (Math.sqrt(3) / 4) * L / S];
+      for (let j = 0; j < n; j++) {
+        const t = tg.get(inst[4 * j]); const w = t ? t.w : 0; if (w > 0) gridded++;
+        morphArr[4 * j] = t ? t.T[0] / S : 0; morphArr[4 * j + 1] = t ? t.T[1] / S : 0; morphArr[4 * j + 2] = morphT * w;
+      }
+    } else { gst = {}; morphArr.fill(0, 0, 4 * n); }
+    dev.queue.writeBuffer(uniBuf, 0, new Float32Array([...Rm.slice(0, 3), 0, ...Rm.slice(3, 6), 0, ...Rm.slice(6, 9), 0, sx, sy, SIDE, 0, ...gr]));
+    if (n) { dev.queue.writeBuffer(instBuf, 0, inst, 0, 4 * n); dev.queue.writeBuffer(morphBuf, 0, morphArr, 0, 4 * n); }
     const enc = dev.createCommandEncoder();
     const pass = enc.beginRenderPass({ colorAttachments: [{ view: ctx.getCurrentTexture().createView(), clearValue: [0, 0, 0, 1], loadOp: 'clear', storeOp: 'store' }] });
     if (n) { pass.setPipeline(pipe); pass.setBindGroup(0, bind); pass.draw(18, n); }
@@ -500,7 +542,7 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     pump();
     drawLabels(S);
     showStats();
-    window.__globe = { drawn, inView, made: madeN, model: G.model, rot: Rm.slice(), zoom, p: P.slice(), epoch, psi, mini: miniImg.filter(Boolean).length, miniN: mg.n, labels: nLabels, previews: previewsN, remade: remadeN, Mm: Mm.slice(), miniView: Vm.slice(), miniFront: Dm.slice(6, 9), noiseCentre: noiseCentre() };
+    window.__globe = { drawn, inView, made: madeN, model: G.model, rot: Rm.slice(), zoom, p: P.slice(), epoch, psi, mini: miniImg.filter(Boolean).length, miniN: mg.n, labels: nLabels, previews: previewsN, remade: remadeN, morph: morphT, gridded, gridAngle: gst.e1 ? (Math.atan2(gst.e1[1], gst.e1[0]) * 180) / Math.PI : 0, Mm: Mm.slice(), miniView: Vm.slice(), miniFront: Dm.slice(6, 9), noiseCentre: noiseCentre() };
     requestAnimationFrame(frame);
   }
 

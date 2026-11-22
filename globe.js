@@ -192,3 +192,73 @@ export function tileZ(V, p, psi, z0) {
   for (let t = 0; t < 64; t++) z[t] = psi * (z0[t] + d[0] * V[t] + d[1] * V[64 + t] + d[2] * V[128 + t]);
   return z;
 }
+
+// Each cell's neighbours (the other ends of its edges), 6 per cell, -1 padding at the 12 pentagons.
+export function neighbours(g) {
+  const nb = new Int32Array(6 * g.n).fill(-1), add = (a, b) => {
+    for (let k = 0; k < 6; k++) { const v = nb[6 * a + k]; if (v === b) return; if (v < 0) { nb[6 * a + k] = b; return; } }
+  };
+  for (let f = 0; f < g.faces.length; f += 3) {
+    const [a, b, c] = [g.faces[f], g.faces[f + 1], g.faces[f + 2]];
+    add(a, b); add(b, a); add(b, c); add(c, b); add(c, a); add(a, c);
+  }
+  return nb;
+}
+
+// Close in, the cells in view reshape into a rectangular grid (gridTargets gives each its place; the shader moves it).
+// Locally the cells form a hex lattice: each gets lattice coordinates (a, b) by walking out from cells already labelled
+// (st.lab keeps them from frame to frame, so the grid holds still while the view pans), along steps e1 (the lattice
+// direction nearest the screen's x, picked once) and e2 (e1 turned 60 degrees). A hex lattice's rows are offset by
+// half a cell from row to row; shifting even rows a quarter cell one way and odd rows the other lines the columns up.
+// view: cell ids; pos: Map id -> [x, y] on screen (y up); anchor: the cell at the view's centre, placed where it is
+// (plus its row's shift). Returns Map id -> { T: [x, y], w } (w 0: stays a hexagon, as two cells claiming one place
+// near a pentagon do, or one that would move more than a cell). st.e1 is the lattice step on screen, for the shader.
+const SQ3 = Math.sqrt(3) / 2;
+export function gridTargets(view, pos, nb, st, anchor) {
+  const inView = new Set(view);
+  st.lab ??= new Map();
+  for (const c of [...st.lab.keys()]) if (!inView.has(c)) st.lab.delete(c);
+  const P = pos.get(anchor);
+  if (!st.lab.size || !st.e1) {
+    st.lab.clear(); st.lab.set(anchor, [0, 0]); let best = -2;
+    for (let k = 0; k < 6; k++) {
+      const v = nb[6 * anchor + k]; if (v < 0 || !pos.has(v)) continue;
+      const d = [pos.get(v)[0] - P[0], pos.get(v)[1] - P[1]], c = d[0] / Math.hypot(...d);
+      if (c > best) { best = c; st.e1 = d; }
+    }
+  }
+  const e1 = st.e1, e2 = [0.5 * e1[0] - SQ3 * e1[1], SQ3 * e1[0] + 0.5 * e1[1]];
+  const steps = [[1, 0, e1], [0, 1, e2], [-1, 1, [e2[0] - e1[0], e2[1] - e1[1]]], [-1, 0, [-e1[0], -e1[1]]], [0, -1, [-e2[0], -e2[1]]], [1, -1, [e1[0] - e2[0], e1[1] - e2[1]]]];
+  const queue = view.filter((c) => st.lab.has(c));
+  for (let qi = 0; qi < queue.length; qi++) {
+    const u = queue[qi], lu = st.lab.get(u), pu = pos.get(u);
+    for (let k = 0; k < 6; k++) {
+      const v = nb[6 * u + k]; if (v < 0 || !inView.has(v) || st.lab.has(v)) continue;
+      const d = [pos.get(v)[0] - pu[0], pos.get(v)[1] - pu[1]]; let bs = -Infinity, s = steps[0];
+      for (const t of steps) { const q = d[0] * t[2][0] + d[1] * t[2][1]; if (q > bs) { bs = q; s = t; } }
+      st.lab.set(v, [lu[0] + s[0], lu[1] + s[1]]); queue.push(v);
+    }
+  }
+  // the lattice step as it is on screen now, from labelled neighbour pairs (it turns slowly as the view pans)
+  let sx = 0, sy = 0, n = 0;
+  for (const c of view) {
+    const l = st.lab.get(c); if (!l) continue;
+    for (let k = 0; k < 6; k++) {
+      const v = nb[6 * c + k], lv = v >= 0 && st.lab.get(v);
+      if (lv && lv[0] === l[0] + 1 && lv[1] === l[1]) { sx += pos.get(v)[0] - pos.get(c)[0]; sy += pos.get(v)[1] - pos.get(c)[1]; n++; }
+    }
+  }
+  if (n) st.e1 = [sx / n, sy / n];
+  const L = Math.hypot(...st.e1), u = [st.e1[0] / L, st.e1[1] / L], w = [-u[1], u[0]];
+  const sh = (b) => ((b % 2) + 2) % 2 ? -0.25 : 0.25, la = st.lab.get(anchor) || [0, 0], out = new Map(), claim = new Map();
+  for (const c of view) {
+    const l = st.lab.get(c); if (!l) { out.set(c, { T: pos.get(c), w: 0 }); continue; }
+    const da = l[0] - la[0], db = l[1] - la[1], x = L * (da + 0.5 * db + sh(l[1])), y = L * SQ3 * db;
+    const T = [P[0] + x * u[0] + y * w[0], P[1] + x * u[1] + y * w[1]], key = `${l[0]},${l[1]}`;
+    const far = Math.hypot(T[0] - pos.get(c)[0], T[1] - pos.get(c)[1]) / L;
+    out.set(c, { T, w: Math.max(0, Math.min(1, (1 - far) / 0.25)) });
+    claim.set(key, (claim.get(key) || 0) + 1);
+  }
+  for (const c of view) { const l = st.lab.get(c); if (l && claim.get(`${l[0]},${l[1]}`) > 1) out.get(c).w = 0; }
+  return out;
+}

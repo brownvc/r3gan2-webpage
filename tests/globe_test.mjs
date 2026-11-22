@@ -1,6 +1,6 @@
 // Tests for globe.js (the class globe: tiling, class field, noise directions). Run: node tests/globe_test.mjs
 import assert from 'node:assert/strict';
-import { geodesic, cellAt, classMix, directions, tileZ, noiseField, noisePoint, tierFor } from '../globe.js';
+import { geodesic, cellAt, classMix, directions, tileZ, noiseField, noisePoint, tierFor, neighbours, gridTargets } from '../globe.js';
 
 const dot = (a, b) => a.reduce((s, x, i) => s + x * b[i], 0);
 const norm = (a) => Math.sqrt(dot(a, a));
@@ -19,6 +19,16 @@ function synthAxes(C) {
 const E3 = new Float32Array(192); E3[0] = 1; E3[65] = 1; E3[130] = 1;  // reference basis e1, e2, e3
 
 const g = geodesic(7);
+// A perfect hex lattice in the plane, cells (i, j) for |i|, |j| <= 8, rows tilted by 10 degrees, spacing 50 px.
+function hexLattice() {
+  const L = 50, th = (10 * Math.PI) / 180, e1 = [L * Math.cos(th), L * Math.sin(th)], e2 = [L * Math.cos(th + Math.PI / 3), L * Math.sin(th + Math.PI / 3)];
+  const id = (i, j) => (Math.abs(i) <= 8 && Math.abs(j) <= 8 ? (i + 8) * 17 + (j + 8) : -1), pos = new Map(), nb = new Int32Array(17 * 17 * 6).fill(-1);
+  for (let i = -8; i <= 8; i++) for (let j = -8; j <= 8; j++) {
+    pos.set(id(i, j), [i * e1[0] + j * e2[0], i * e1[1] + j * e2[1]]);
+    [[1, 0], [0, 1], [-1, 1], [-1, 0], [0, -1], [1, -1]].forEach(([a, b], k) => { nb[id(i, j) * 6 + k] = id(i + a, j + b); });
+  }
+  return { L, th, id, pos, nb, view: [...pos.keys()] };
+}
 const tests = {
   tiling() {
     assert.equal(g.n, 163842);
@@ -82,6 +92,36 @@ const tests = {
       const d = Math.max(...A.map((x, i) => Math.abs(x - B[i])));
       assert.ok(d < 1e-4, `trial ${trial}: V changed by ${d} when one stored eigenvector's sign flipped`);
     }
+  },
+  neighbours() {  // each cell's neighbours: 6 (5 at the 12 pentagons), distinct, and each lists it back
+    const nb = neighbours(g);
+    for (let i = 0; i < g.n; i += 101) {
+      const k = g.cellStart[i + 1] - g.cellStart[i], ns = [...nb.subarray(6 * i, 6 * i + 6)].filter((v) => v >= 0);
+      assert.equal(ns.length, k, `cell ${i}`); assert.equal(new Set(ns).size, k);
+      for (const v of ns) assert.ok(nb.subarray(6 * v, 6 * v + 6).includes(i), `${v} does not list ${i}`);
+    }
+  },
+  gridTargets() {  // a hex lattice goes to an aligned rectangular grid, rows along the lattice, one cell per place
+    const H = hexLattice(), st = {}, T = gridTargets(H.view, H.pos, H.nb, st, H.id(0, 0));
+    const u = [Math.cos(H.th), Math.sin(H.th)], w = [-u[1], u[0]], seen = new Set();
+    let x0 = null;
+    for (const c of H.view) {
+      const t = T.get(c); assert.ok(t && t.w === 1, `cell ${c}: ${JSON.stringify(t)}`);
+      const x = (t.T[0] * u[0] + t.T[1] * u[1]) / H.L, y = (t.T[0] * w[0] + t.T[1] * w[1]) / (H.L * Math.sqrt(3) / 2);
+      const fx = ((x % 1) + 1) % 1; x0 ??= fx;
+      assert.ok(Math.abs(fx - x0) < 1e-6 || Math.abs(Math.abs(fx - x0) - 1) < 1e-6, `cell ${c}: column offset ${fx} vs ${x0}`);
+      assert.ok(Math.abs(y - Math.round(y)) < 1e-6, `cell ${c}: row ${y}`);
+      const key = `${Math.round(x - x0)},${Math.round(y)}`; assert.ok(!seen.has(key), `two cells at ${key}`); seen.add(key);
+    }
+  },
+  gridTargetsSteady() {  // panning moves the anchor: the grid must not jump (no row-parity flip), and labels persist
+    const H = hexLattice(), st = {}, A = gridTargets(H.view, H.pos, H.nb, st, H.id(0, 0));
+    for (const a of [H.id(1, 1), H.id(0, 1), H.id(-2, 3)]) {
+      const B = gridTargets(H.view, H.pos, H.nb, st, a);
+      for (const c of H.view) assert.ok(Math.hypot(A.get(c).T[0] - B.get(c).T[0], A.get(c).T[1] - B.get(c).T[1]) < 1e-6, `anchor ${a}: cell ${c} moved`);
+    }
+    const half = H.view.filter((c) => H.pos.get(c)[0] > 0), C = gridTargets(half, H.pos, H.nb, st, H.id(4, 0));
+    for (const c of half) assert.ok(Math.hypot(A.get(c).T[0] - C.get(c).T[0], A.get(c).T[1] - C.get(c).T[1]) < 1e-6, `after a pan, cell ${c} moved`);
   },
   tierFor() {  // a resolution tier is used only while the cells in view fit in it, or tiles would be remade forever
     assert.equal(tierFor(150, 300, [Infinity, 8192, 512]), 2);

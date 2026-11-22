@@ -84,6 +84,11 @@ with sync_playwright() as p:
     pg.keyboard.press('p'); pg.wait_for_timeout(2500); check(pg.evaluate(f'{G}.made') > m1, 'P again resumes')
     pg.goto(URL, wait_until='load'); pg.wait_for_function(f'{G} && {G}.drawn >= 50', timeout=180000); pg.wait_for_timeout(500)
     cap = pg.inner_text('#minicap'); check('golden retriever' in cap, f'the noise globe names its class: {cap!r}')
+    # close in, the cells reshape into a rectangular grid; at the start zoom they are hexagons
+    check(pg.evaluate(f'{G}.morph') == 0, f"at the start zoom the cells are hexagons: morph {pg.evaluate(f'{G}.morph')}")
+    pg.goto(URL + '&zoom=25000', wait_until='load'); pg.wait_for_function(f'{G} && {G}.drawn >= 4', timeout=180000); pg.wait_for_timeout(1500)
+    s = pg.evaluate(G); check(s['morph'] == 1 and s['gridded'] >= 0.9 * s['drawn'], f"close in, the tiles are a grid: morph {s['morph']}, {s['gridded']} of {s['drawn']} placed")
+    check(abs(s['gridAngle']) < 2, f"close in, the grid's rows are level: {s['gridAngle']:.1f} degrees")
     # spinning the class globe across classes: the noise globe holds still (no class switches, no fades) until it settles
     pg.goto(URL + '&zoom=2500', wait_until='load'); pg.wait_for_function(f'{G} && {G}.drawn >= 50', timeout=180000); pg.wait_for_timeout(1500)
     caps = [pg.inner_text('#minicap')]; bb = pg.locator('#globe').bounding_box(); x, y = bb['x'] + 100, bb['y'] + bb['height'] / 2
