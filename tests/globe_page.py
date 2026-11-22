@@ -86,6 +86,17 @@ with sync_playwright() as p:
     cap = pg.inner_text('#minicap'); check('golden retriever' in cap, f'the noise globe names its class: {cap!r}')
     # close in, the cells reshape into a rectangular grid; at the start zoom they are hexagons
     check(pg.evaluate(f'{G}.morph') == 0, f"at the start zoom the cells are hexagons: morph {pg.evaluate(f'{G}.morph')}")
+    # midway through the morph the tiles stay whole to the screen's edges: no empty space between or above them (a tall
+    # window: the far rows drift most)
+    tall = b.new_context(viewport={'width': 1100, 'height': 1300}).new_page()
+    for zm in (12730, 14100):
+        tall.goto(URL + f'&zoom={zm}', wait_until='load'); tall.wait_for_function(f'{G} && {G}.inView > 0 && {G}.drawn >= {G}.inView', timeout=180000)
+        tall.wait_for_timeout(2500); bb = tall.locator('#globe').bounding_box()
+        shot = tall.screenshot(clip={'x': bb['x'] + 320, 'y': bb['y'] + 8, 'width': 320, 'height': bb['height'] - 16})
+        from PIL import Image; import io
+        im = Image.open(io.BytesIO(shot)).convert('RGB'); px = list(im.getdata()); empty = sum(1 for p in px if p == (0, 0, 0)) / len(px)
+        check(empty < 0.003, f'midway through the morph (zoom {zm}) no empty space: {empty:.2%} of the strip is bare')
+    tall.context.close()
     pg.goto(URL + '&zoom=25000', wait_until='load'); pg.wait_for_function(f'{G} && {G}.drawn >= 4', timeout=180000); pg.wait_for_timeout(1500)
     s = pg.evaluate(G); check(s['morph'] == 1 and s['gridded'] >= 0.9 * s['drawn'], f"close in, the tiles are a grid: morph {s['morph']}, {s['gridded']} of {s['drawn']} placed")
     check(abs(s['gridAngle']) < 2, f"close in, the grid's rows are level: {s['gridAngle']:.1f} degrees")

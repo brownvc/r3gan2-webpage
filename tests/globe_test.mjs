@@ -152,6 +152,15 @@ const tests = {
       assert.ok(Math.abs(t.slide) === 1 && Math.abs((d[0] * u[0] + d[1] * u[1]) - t.slide * 0.25 * H.L) < 1e-6, `cell ${c}: slide sign ${t.slide}`);
     }
   },
+  gridTargetsDistorted() {  // the real tiling drifts from the ideal lattice towards the screen's edges: every cell still reshapes fully
+    const H = hexLattice(), pos = new Map();
+    for (const [c, p] of H.pos) pos.set(c, [p[0] + 0.02 * p[0] * p[0] / H.L, p[1] + 0.02 * p[0] * p[1] / H.L]);  // up to ~1.3 cells off
+    const T = gridTargets(H.view, pos, H.nb, {}, H.id(0, 0)), seen = new Set();
+    for (const c of H.view) {
+      const t = T.get(c); assert.equal(t.w, 1, `cell ${c} reshapes only partly`);
+      const k = `${Math.round(t.B[0])},${Math.round(t.B[1])}`; assert.ok(!seen.has(k), `two cells at ${k}`); seen.add(k);
+    }
+  },
   gridTargetsSteady() {  // panning moves the anchor: the grid must not jump (no row-parity flip), and labels persist
     const H = hexLattice(), st = {}, A = gridTargets(H.view, H.pos, H.nb, st, H.id(0, 0));
     for (const a of [H.id(1, 1), H.id(0, 1), H.id(-2, 3)]) {

@@ -190,7 +190,7 @@
 
 <script type="module">
 import { createLab, MODELS, weightsFile, fileExists, savedInBrowser, gauss, Z, fmt, SMALL_DEVICE } from './lab.js?v=20261121a';
-import { geodesic, classMix, directions, tileZ, noiseField, noisePoint, tierFor, neighbours, gridTargets, anchorWeights, nearestSpacing } from './globe.js?v=20261122k';
+import { geodesic, classMix, directions, tileZ, noiseField, noisePoint, tierFor, neighbours, gridTargets, anchorWeights, nearestSpacing } from './globe.js?v=20261122l';
 const $ = (id) => document.getElementById(id);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 // Left out, as on the map: clothing classes whose training photos are mostly people in swimwear or underwear.
@@ -530,7 +530,8 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
       const x = g.centres[3 * i], y = g.centres[3 * i + 1], zc = g.centres[3 * i + 2];
       const vz = Rm[6] * x + Rm[7] * y + Rm[8] * zc; if (vz <= 0) continue;
       const vx = (Rm[0] * x + Rm[1] * y + Rm[2] * zc) * S, vy = (Rm[3] * x + Rm[4] * y + Rm[5] * zc) * S, rp = rad[i] * S;
-      if (Math.abs(vx) > hw + rp || Math.abs(vy) > hh + rp) continue;
+      const mgn = rp * (1 + 3 * morphT);  // while reshaping, cells just past the edges too: drifting in, they fill them
+      if (Math.abs(vx) > hw + mgn || Math.abs(vy) > hh + mgn) continue;
       inView++;
       if (vis) { vis.push(i); vpos.set(i, [vx, vy]); }
       if (vz > best) { best = vz; centreCell = i; }  // the point facing the viewer

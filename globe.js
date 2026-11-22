@@ -241,7 +241,7 @@ export function neighbours(g) {
 // half a cell from row to row; shifting even rows a quarter cell one way and odd rows the other lines the columns up.
 // view: cell ids; pos: Map id -> [x, y] on screen (y up); anchor: the cell at the view's centre, placed where it is
 // (plus its row's shift). Returns Map id -> { T: [x, y], w } (w 0: stays a hexagon, as two cells claiming one place
-// near a pentagon do, or one that would move more than a cell). st.e1 is the lattice step on screen, for the shader.
+// near a pentagon do). st.e1 is the lattice step on screen, for the shader.
 const SQ3 = Math.sqrt(3) / 2;
 export function gridTargets(view, pos, nb, st, anchor) {
   const inView = new Set(view);
@@ -285,9 +285,10 @@ export function gridTargets(view, pos, nb, st, anchor) {
     const da = l[0] - la[0], db = l[1] - la[1], s = sh(l[1]), x = L * (da + 0.5 * db), y = L * SQ3 * db;
     // B: the cell's place in the lattice (a brick wall once reshaped); T: after its row slides s cells along the rows
     const B = [P[0] + x * u[0] + y * w[0], P[1] + x * u[1] + y * w[1]];
+    // every cell reshapes fully, however far its place has drifted from it (towards the screen's edges the real tiling
+    // drifts up to about a cell from the ideal lattice): a partly reshaped cell would break its seams
     const T = [B[0] + s * L * u[0], B[1] + s * L * u[1]], key = `${l[0]},${l[1]}`;
-    const far = Math.hypot(T[0] - pos.get(c)[0], T[1] - pos.get(c)[1]) / L;
-    out.set(c, { T, B, slide: s / 0.25, w: Math.max(0, Math.min(1, (1 - far) / 0.25)) });
+    out.set(c, { T, B, slide: s / 0.25, w: 1 });
     claim.set(key, (claim.get(key) || 0) + 1);
   }
   for (const c of view) { const l = st.lab.get(c); if (l && claim.get(`${l[0]},${l[1]}`) > 1) out.get(c).w = 0; }
