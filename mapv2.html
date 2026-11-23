@@ -221,7 +221,7 @@
     <div class="prow"><button type="button" id="pathplay">Pause</button><button type="button" id="pathclear">Clear</button></div>
   </div>
   <canvas id="mini" title="Minimap: click or drag to go there (M hides it)" aria-label="Minimap"></canvas>
-  <div id="minicap" hidden><span id="minicapt">Noise: spin to change</span><br><span class="shift">Shift: all classes (careful!)</span></div>
+  <div id="minicap" hidden><span id="minicapt">Noise: spin to change</span><br><span class="shift">+ Shift: all classes (careful!)</span></div>
   <canvas id="gmini" hidden title="The noise globe: spin it to move the named class along its strongest noise directions; Shift-spin moves every class (M hides it)" aria-label="Noise globe"></canvas>
   <button id="minisize" hidden title="Larger noise globe" aria-label="Larger noise globe" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path class="grow" d="M9.5 2.5h4v4M13.5 2.5 9 7M6.5 13.5h-4v-4M2.5 13.5 7 9"/><path class="shrink" d="M13 7H9V3M9 7l4.5-4.5M3 9h4v4M7 9l-4.5 4.5"/></svg></button>
   <div id="status" role="status">Starting WebGPU…</div>
@@ -290,6 +290,9 @@
           <div class="ends"><span>More typical</span><span>More varied</span></div>
         </div>
         <h3>Noise</h3>
+        <div class="checks"><label><input id="ngon" type="checkbox"> Noise globe</label></div>
+        <p class="help" id="nghelp">Steer each class’s noise by hand: a small globe sets the noise along the class’s 3 strongest directions. Spin it to change the class it names; with Shift, every class.</p>
+        <p class="help" id="ngcode" hidden title="The noise of the class the noise globe names, as a rotation in degrees (axis times angle)"></p>
         <p class="help">Each visit draws its own noise, so your map is yours alone; the link keeps it.</p>
         <div class="bar"><label for="nseed">Seed</label><input id="nseed" type="number" min="0" max="999999" step="1"><button class="plain" id="nprev" aria-label="Previous noise seed">&lsaquo;</button><button class="plain" id="nnext" aria-label="Next noise seed">&rsaquo;</button><button class="plain" id="newn">Random</button></div>
         <div class="slider">
@@ -297,9 +300,6 @@
           <input id="nstr" type="range" min="0" max="2" step="0.1" value="1" title="Scales the noise field: 0 leaves it out, 1 is what the model was trained with">
           <div class="ends"><span>None</span><span>Twice</span></div>
         </div>
-        <div class="checks"><label><input id="ngon" type="checkbox"> Noise globe</label></div>
-        <p class="help" id="nghelp">Steer each class’s noise by hand: a small globe sets the noise along the class’s 3 strongest directions. Spin it to change the class it names; with Shift, every class.</p>
-        <p class="help" id="ngcode" hidden title="The noise of the class the noise globe names, as a rotation in degrees (axis times angle)"></p>
         <h3>Decoders</h3>
         <div class="seg" role="group" aria-label="Decoders: each on or off">
           <button class="dtog" data-d="conv" title="Each tile first shows its latent through a small linear map: instant, rough colour. Off: the latent itself, channels 1–3 as RGB">Conv<small>instant, rough</small></button><button class="dtog" data-d="taef2" title="TAEF2, the small decoder distilled from FLUX.2’s: fast enough for live maps">TAEF2<small>distilled, fast</small></button><button class="dtog" data-d="flux2" title="The full FLUX.2 decoder (FP32). With TAEF2 on, it redoes the tiles in view once you stop at close zoom; alone, it decodes every tile (slow)">FLUX.2<small>full, slow</small></button>
