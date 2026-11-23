@@ -94,6 +94,16 @@ const tests = {
       if (i < na) assert.ok(w.some(([a, x]) => a === i && Math.abs(x - 1) < 1e-6), `anchor ${i} is not its own`);
     }
   },
+  anchorLevels() {  // Morphing's stops (mapv2): anchors every 1, 2 or 8 cells are the tiling 0, 1 or 3 levels coarser
+    for (const [L, every] of [[7, 1], [6, 2], [4, 8]]) {
+      const ga = geodesic(7, L), na = 10 * 4 ** L + 2;
+      for (let i = 0; i < ga.n; i += 4099) {
+        const w = anchorWeights(ga, i);
+        assert.ok(w.every(([a]) => a < na) && Math.abs(w.reduce((s, [, x]) => s + x, 0) - 1) < 1e-6, `level ${L}, cell ${i}: ${JSON.stringify(w)}`);
+        if (every === 1) assert.ok(w.some(([a, x]) => a === i && Math.abs(x - 1) < 1e-6), `level 7: cell ${i} is not its own anchor`);
+      }
+    }
+  },
   directionsPure() {
     const { V, share } = directions({ 0: 1 }, synthAxes(4), E3);
     for (let a = 0; a < 3; a++) {
