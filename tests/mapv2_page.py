@@ -109,6 +109,12 @@ with sync_playwright() as p:
     check(pg.evaluate(f'{G}.on') and v()['layout'] == 'globe', f'quick layout toggles end on the globe ({n} frames in a second)')
     pg.click('.lbtn[data-l="all"]'); pg.wait_for_timeout(800)
     pg.wait_for_function(f'{V}.left === 0', timeout=180000); check(True, 'the flat view completes (made again after the seed change)')
+    # Conv alone on the flat map: a new seed makes the latents shown again (no stale tiles)
+    pg.click('.dtog[data-d="taef2"]'); pg.wait_for_timeout(500); s = v(); p0, n0 = s['previews'], s['viewTotal']; pg.click('#nnext')
+    try: pg.wait_for_function(f'{V}.previews >= {p0} + 0.9 * {n0}', timeout=60000); ok = True
+    except Exception: ok = False
+    check(ok, f"Conv alone on the flat map: a new seed remakes the latents in view ({v()['previews'] - p0} of {n0})")
+    pg.click('.dtog[data-d="taef2"]'); pg.wait_for_function(f'{V}.left === 0', timeout=180000)
     # and to the globe again: its place is kept
     pg.click('.lbtn[data-l="globe"]'); pg.wait_for_function(f'{G}.on', timeout=60000); pg.wait_for_timeout(300)
     check(max(abs(a - b) for a, b in zip(g()['rot'], rot)) < 1e-6, 'the globe is where it was left')

@@ -860,7 +860,7 @@ async function main() {
     for (let n = 0; n < want.length && (mv ? inflight + inflightP < 1 : inflight < slots || inflightP < pvSlots);) {
       const [, i, j] = want[n], k = i + ',' + j;
       if (pending.has(k) || doneSince.has(k)) { want.splice(n, 1); continue; }  // doneSince: finished since want was collected
-      const pv = latFirst && !tiny.has(k) && !madeAt(i, j);  // nothing made yet: its latent first
+      const pv = latFirst && (convOnly || !tiny.has(k)) && !madeAt(i, j);  // nothing made yet: its latent first (Conv alone: also a latent made for older settings, see remake)
       if (mv ? inflight + inflightP >= 1 : pv ? inflightP >= pvSlots : inflight >= slots) {
         if (pv || mv || !needPv) break;  // decode slots full and no wanted tile needs a latent: nothing more can start
         n++; continue;
@@ -1034,6 +1034,9 @@ async function main() {
     for (const k of tiny.slot.keys()) prevOnly.add(k);
     for (const k of full.keys()) prevOnly.add(k);
     for (const B of blocks.values()) for (let t = 0; t < B.done.length; t++) if (B.done[t] === 2) B.done[t] = 1;
+    // Conv alone: a latent is all a tile gets, so each counts as not made and is previewed again with the new settings
+    // (it stays drawn till then). Otherwise the decode that follows replaces it.
+    if (convOnly) for (const B of blocks.values()) B.done.fill(0);
     if (!keepFull) refined.clear();  // refined with the old settings: refined again after the TAEF2 remake
     else for (const k of refined) {  // still right: undo their marking above
       prevOnly.delete(k);
@@ -1715,7 +1718,7 @@ async function main() {
         if (!drawn) drawn = tiny.draw(ctx, k, x0, y0, w, h);
         if (!drawn && full.has(k)) { ctx.drawImage(full.get(k), x0, y0, w, h); drawn = true; }
         if (collect && !has(k, tier)) {
-          const r = fillKey(i, j), empty = latFirst ? !tiny.has(k) && !madeAt(i, j) : !drawn;
+          const r = fillKey(i, j), empty = latFirst ? (convOnly || !tiny.has(k)) && !madeAt(i, j) : !drawn;
           if (BENCH) { if (empty) emptyN++; if (Math.hypot(i + 0.5 - view.x, j + 0.5 - view.y) < 0.25 * halfDiag) centreLeft++; }
           // Latents first: a tile with nothing gets its latent at its distance r, a decode only once the latents have
           // reached r + lead. Otherwise: empty tiles first, then sharper versions. Nearest first within each.
