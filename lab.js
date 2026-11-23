@@ -174,7 +174,6 @@ export async function savedInBrowser(name) {  // any stored version of this file
   catch (e) { return false; }
 }
 
-const ORT = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/';
 const SLOTS = 3;
 
 // A generator that can switch model, decoder and precision while running:
@@ -305,20 +304,26 @@ export async function createLab({ onStatus = () => {}, onLost = () => {} } = {})
     finally { onStatus(''); }
   });
 
-  // ---- the full FLUX.2 decoder: onnxruntime-web on its own WebGPU device, one decode at a time ----
-  let session = null, starting = null, ortChain = Promise.resolve();
+  // ---- the full FLUX.2 decoder: onnxruntime-web in a Web Worker (refine-worker.js) on its own WebGPU device, one
+  // decode at a time. Reading the 200 MB and compiling it took the page's thread for up to 1.4 s at a time; in the
+  // worker the page keeps responding while it loads. ----
+  let rw = null, rwReady = null, onRW = null, say = () => {}, ortChain = Promise.resolve();
   // quiet: no status messages (for refining in the background, see map.html); one load however many ask at once.
   function vae(quiet = false) {
-    if (session) return Promise.resolve(session);
-    const say = quiet ? () => {} : onStatus;
-    return (starting ??= (async () => {
-      if (!globalThis.ort) await new Promise((ok, err) => { const s = document.createElement('script'); s.src = ORT + 'ort.webgpu.min.js'; s.onload = ok; s.onerror = () => err(new Error('could not load onnxruntime-web')); document.head.appendChild(s); });
-      ort.env.wasm.wasmPaths = ORT;
-      const bytes = new Uint8Array(await cachedBytes(DATA + 'vae_dec.onnx', (s) => say(s.replace('the model', 'the FLUX.2 decoder (200 MB)'))));
-      say('Starting the FLUX.2 decoder…');
-      session = await ort.InferenceSession.create(bytes, { executionProviders: ['webgpu'] });
-      return session;
-    })().finally(() => { starting = null; }));
+    say = quiet ? () => {} : onStatus;
+    return (rwReady ??= new Promise((ok, fail) => {
+      rw = new Worker(new URL('./refine-worker.js?v=20261123a', import.meta.url), { type: 'module' });
+      const failed = (msg) => { if (onRW) onRW({ error: msg }); else fail(new Error(msg)); };
+      rw.onerror = (e) => failed(e.message || 'the FLUX.2 decoder worker failed');
+      rw.onmessage = (e) => {
+        const m = e.data;
+        if (m.progress) say(m.progress.replace('the model', 'the FLUX.2 decoder (200 MB)'));
+        else if (m.ready) ok();
+        else if (onRW) onRW(m);
+        else if (m.error) fail(new Error(m.error));
+      };
+      rw.postMessage({ load: { url: new URL(DATA + 'vae_dec.onnx', location.href).href } });
+    }).catch((e) => { rw.terminate(); rw = null; rwReady = null; throw e; }));  // a later call tries again
   }
   // Whether the GPU looks able to hold the full FLUX.2 decoder beside the map: ~200 MB of weights and a few hundred MB
   // of working memory. WebGPU does not say how much memory is free, so this asks for that much (3 x 256 MB) on this
@@ -334,9 +339,12 @@ export async function createLab({ onStatus = () => {}, onLost = () => {} } = {})
     return !err;
   }
   const decode = (lat) => {  // latent NCHW [1, 32, 32, 32] -> image NCHW [1, 3, 256, 256] in [0, 1]
-    const run = ortChain.then(() => session.run({ latent: new ort.Tensor('float32', lat, [1, 32, 32, 32]) }));
+    const run = ortChain.then(() => new Promise((ok, fail) => {
+      onRW = (m) => { onRW = null; if (m.error) fail(new Error(m.error)); else ok(m.img); };
+      rw.postMessage({ lat, sig: 0 }, [lat.buffer]);
+    }));
     ortChain = run.catch(() => {});
-    return run.then((r) => r.image.data);
+    return run;
   };
 
   // ---- smooth mode, while the user drags or zooms (the page sets lab.smooth) ----
@@ -386,7 +394,7 @@ export async function createLab({ onStatus = () => {}, onLost = () => {} } = {})
         return new ImageData(px, 256, 256);
       } finally { give(imgPool, st); }
     }
-    // FLUX.2: the latent (kept, or from the generator) read back, decoded with ORT.
+    // FLUX.2: the latent (kept, or from the generator) read back, decoded in the worker.
     const st = await take(latPool);
     const kb = keepId != null && takeLatent(keepId);
     let lat;

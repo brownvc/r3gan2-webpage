@@ -320,7 +320,7 @@
 <script type="module">
 import { createFastGAN } from './fastgan.js?v=20261122d';
 import { DATA } from './config.js';
-import { cachedBytes as stored, gauss, savedInBrowser, gpuLostNotice, scoped, gpuLabel, SMALL_DEVICE } from './lab.js?v=20261122d';  // one copy of the storage code
+import { cachedBytes as stored, gauss, savedInBrowser, gpuLostNotice, scoped, gpuLabel, SMALL_DEVICE } from './lab.js?v=20261123a';  // one copy of the storage code
 const data = (f) => DATA + f;  // weights, embeddings, test vectors, decoder
 const log = (s) => { document.getElementById('log').textContent += s + '\n'; console.log(s); };
 let lastErr = ''; const logOnce = (s) => { if (s !== lastErr) { lastErr = s; log(s); } };  // for errors that recur every frame
@@ -870,7 +870,7 @@ async function main() {
   }
   function refineWorker() {
     if (rw) return;
-    rw = new Worker(new URL('./refine-worker.js', import.meta.url), { type: 'module' });
+    rw = new Worker(new URL('./refine-worker.js?v=20261123a', import.meta.url), { type: 'module' });
     rw.onmessage = (e) => onRefined(e.data);
     rw.onerror = (e) => refineFailed(e.message || 'the worker failed to start');
     rwBusy = true;
