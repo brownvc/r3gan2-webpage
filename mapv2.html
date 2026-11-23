@@ -1704,7 +1704,7 @@ async function main() {
       html += NG.lineHTML();  // the noise globe, when on: the centre class and what its 3 directions carry
       const code = NG.code(); if ($('ngcode').textContent !== code) { $('ngcode').textContent = code; $('ngcode').hidden = !code; }
       noiseToURL(); window.__noise = NG.state();
-      window.__path = { n: path.points.length, loop: !!path.loop, drawing: path.drawing, s: head.s, pen: !!pen, scrub: scrub !== null, view: [view.x, view.y, view.s], dot: (() => { const D = dotAt(performance.now()), q = D && pathScreen(D); return q ? [q[0], q[1]] : null; })(), dotShown: pathDot ? dotShown : '' };  // for the tests
+      window.__path = { n: path.points.length, loop: !!path.loop, drawing: path.drawing, s: head.s, pen: !!pen, scrub: scrub !== null, view: [view.x, view.y, view.s], dot: (() => { const D = dotAt(performance.now()), q = D && pathScreen(D); return q ? [q[0], q[1]] : null; })(), dotShown: pathDot ? dotShown : '', arrow: pathDot && dotShown === 'arrow' ? arrowAt : null };  // for the tests
       if (html !== hudHTML) $('stats').innerHTML = hudHTML = html;
       window.__v2 = { layout: globeOn ? 'globe' : look.layout, zoomPct: globeOn ? gv.zoomPct() : 100 * view.s / S100, held, viewTotal: C.viewTotal, left, made: C.made, previews: C.previews, epoch };
     }
@@ -1967,8 +1967,20 @@ async function main() {
   // The path over the map: a white line with a dark edge (readable on any tile), dashed over bridges, thicker round
   // a loop; when an endless path nears its cap, its oldest tenth fades in. Then the dot, or an arrow at the edge
   // pointing to it when it is off screen.
-  let accent = '', dotShown = '';  // dotShown: how the dot was last drawn ('dot', or 'arrow' when off screen or round the back)
+  let accent = '', dotShown = '', arrowAt = null;  // arrowAt: where the arrow was last drawn (CSS px), for the tests  // dotShown: how the dot was last drawn ('dot', or 'arrow' when off screen or round the back)
   const scrOut = [0, 0, true];
+  // The overlays over the map (readout, path window, minimap, noise globe, panel, credit) as boxes in the map area's
+  // CSS px, read at most twice a second: the arrow to an off-screen dot keeps clear of them.
+  let ovBoxes = [], ovAt = -1e9;
+  function overlayBoxes() {
+    const now = performance.now(); if (now - ovAt < 500) return ovBoxes;
+    ovAt = now; ovBoxes = []; const w = wrap.getBoundingClientRect();
+    for (const id of ['stats', 'pathwin', 'mini', 'gmini', 'minicap', 'rail', 'railtab', 'credit']) {
+      const e = $(id); if (!e.offsetWidth) continue;
+      const r = e.getBoundingClientRect(); ovBoxes.push([r.left - w.left, r.top - w.top, r.right - w.left, r.bottom - w.top]);
+    }
+    return ovBoxes;
+  }
   // scr(p, o): where path point p shows on the canvas, written into o: [x, y, in front]. limb: the globe's radius on
   // the canvas (0 on the flat maps), for the arrow to a dot round the back.
   function drawPathOn(g2, k, W2, H2, scr, limb) {
@@ -2000,7 +2012,12 @@ async function main() {
       } else {  // off screen, or round the back of the globe: an arrow on the edge (or the globe's rim), pointing at it
         const ang = Math.atan2(y - H2 / 2, x - W2 / 2), r = 9 * k;
         if (!o[2]) { x = W2 / 2 + limb * Math.cos(ang); y = H2 / 2 + limb * Math.sin(ang); }
-        g2.translate(clamp(x, m, W2 - m), clamp(y, m, H2 - m)); g2.rotate(ang);
+        // at the edge (or the rim), then inwards towards the centre until it is clear of the overlays
+        let ax = clamp(x, m, W2 - m), ay = clamp(y, m, H2 - m);
+        const bx = overlayBoxes(), far = Math.hypot(W2 / 2 - ax, H2 / 2 - ay) || 1, ux = (W2 / 2 - ax) / far, uy = (H2 / 2 - ay) / far;
+        for (let t = 0; t < far && bx.some((b) => ax > b[0] * k - m && ax < b[2] * k + m && ay > b[1] * k - m && ay < b[3] * k + m); t += 8 * k) { ax += 8 * k * ux; ay += 8 * k * uy; }
+        arrowAt = [ax / k, ay / k];
+        g2.translate(ax, ay); g2.rotate(ang);
         g2.beginPath(); g2.moveTo(r, 0); g2.lineTo(-r * 0.7, r * 0.75); g2.lineTo(-r * 0.7, -r * 0.75); g2.closePath();
         g2.fillStyle = accent; g2.fill(); g2.lineWidth = 1.5 * k; g2.strokeStyle = '#ffffff'; g2.stroke();
       }

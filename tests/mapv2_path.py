@@ -38,6 +38,11 @@ with sync_playwright() as p:
         im = Image.open(io.BytesIO(pg.screenshot(clip=clip))).convert('RGB'); px = list(im.get_flattened_data()) if hasattr(im, 'get_flattened_data') else list(im.getdata())
         return sum(1 for r, gg, bb in px if r > 250 and gg > 250 and bb > 250), sum(1 for r, gg, bb in px if r > 170 and gg < 30 and bb < 30)
     AREA = {'x': 240, 'y': 60, 'width': 600, 'height': 560}   # the map between the overlays
+    # is the arrow (its place in the page's test hook, CSS px in the map area) clear of every overlay?
+    CLEAR = """() => { const a = window.__path.arrow; if (!a) return 'no arrow'; const w = document.getElementById('wrap').getBoundingClientRect(), x = w.left + a[0], y = w.top + a[1];
+      for (const id of ['stats', 'pathwin', 'mini', 'gmini', 'minicap', 'rail', 'railtab', 'credit']) { const e = document.getElementById(id); if (!e || !e.offsetWidth) continue;
+        const r = e.getBoundingClientRect(); if (x > r.left - 4 && x < r.right + 4 && y > r.top - 4 && y < r.bottom + 4) return 'under ' + id; }
+      return x >= w.left && x <= w.right && y >= w.top && y <= w.bottom ? 'clear' : 'off the map'; }"""
     def touch(kind, pts):
         cdp.send('Input.dispatchTouchEvent', {'type': kind, 'touchPoints': [{'x': x, 'y': y, 'id': i} for i, (x, y) in enumerate(pts)]})
 
@@ -106,7 +111,7 @@ with sync_playwright() as p:
     # the dot off screen: an arrow at the edge points to it
     pg.keyboard.press('d'); stroke(line(cx - 60, cy, cx + 60, cy + 20)); pg.keyboard.press('d'); pg.click('#pathplay'); pg.wait_for_timeout(400)
     stroke(line(cx + 200, cy + 150, cx - 350, cy - 250, 20), hold=200); stroke(line(cx + 200, cy + 150, cx - 350, cy - 250, 20), hold=200); pg.wait_for_timeout(500)
-    s = path(); check(s['dotShown'] == 'arrow' and s['dot'] is not None and not (0 <= s['dot'][0] <= 1200 and 0 <= s['dot'][1] <= 800), f"flat: with the path off screen its dot is drawn as an arrow at the edge (dot at {s['dot']})")
+    s = path(); where = pg.evaluate(CLEAR); check(s['dotShown'] == 'arrow' and s['dot'] is not None and not (0 <= s['dot'][0] <= 1200 and 0 <= s['dot'][1] <= 800) and where == 'clear', f"flat: with the path off screen its dot is drawn as an arrow, clear of the overlays (arrow at {s['arrow']}: {where})")
     if SHOTS: pg.screenshot(path=f'{SHOTS}/path_flat_arrow.png')
     flat_n = path()['n']
 
@@ -121,7 +126,7 @@ with sync_playwright() as p:
     rad = pg.evaluate(f'{G}.zoom'); need = math.pi * rad   # px of drag for half a turn
     for _ in range(math.ceil(need / 500)): stroke(line(cx - 250, cy + 250, cx + 250, cy + 250, 20), hold=200)
     pg.wait_for_timeout(600); w2, r2 = colours(AREA)
-    s = path(); check(w2 < w0 + 80 and s['dotShown'] == 'arrow' and s['dot'] is None, f"globe: with the path round the back, the line is hidden and its dot is drawn as an arrow ({w2 - w0} white px)")
+    s = path(); where = pg.evaluate(CLEAR); check(w2 < w0 + 80 and s['dotShown'] == 'arrow' and s['dot'] is None and where == 'clear', f"globe: with the path round the back, the line is hidden and its dot is an arrow, clear of the overlays (arrow at {s['arrow']}: {where}; {w2 - w0} white px)")
     if SHOTS: pg.screenshot(path=f'{SHOTS}/path_globe_arrow.png')
     globe_n = path()['n']
     # each layout keeps its own path
