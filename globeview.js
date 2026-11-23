@@ -364,7 +364,7 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     const vis = morphT > 0 ? [] : null, vpos = morphT > 0 ? new Map() : null;
     if (pointers.size > 0 || globeFling.on || zoom !== zoomGoal || sh.arrows.size > 0) movedAt = now;
     let n = 0, best = -2, cn = 0; inView = 0; left = 0; leftP = 0;
-    const wantRefine = !refining && env.refineOK(), near2 = [];
+    const wantRefine = !refining && now - movedAt > 200 && env.refineOK(), near2 = [];  // not while the globe moves (a flick, a zoom)
     const hw = W / 2, hh = H / 2;
     for (let i = 0; i < N; i++) {
       const x = g.centres[3 * i], y = g.centres[3 * i + 1], zc = g.centres[3 * i + 2];

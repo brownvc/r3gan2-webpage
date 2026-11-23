@@ -324,7 +324,7 @@
 <script type="module">
 import { createLab, MODELS, weightsFile, fileExists, savedInBrowser, gauss, hash2, rng, Z, fmt, DATA, SMALL_DEVICE } from './lab.js?v=20261122d';
 import { Path, Playhead } from './path.js?v=20261120b';
-import { createGlobeView } from './globeview.js?v=20261123c';
+import { createGlobeView } from './globeview.js?v=20261123d';
 import { createNoiseGlobe } from './noiseglobe.js?v=20261123a';
 const $ = (id) => document.getElementById(id);
 
@@ -484,9 +484,14 @@ async function main() {
   // walk, one image morphing into the next, within a region and across a coastline into the next class. At SPAN 1
   // every tile is an anchor: an independent sample of its spot's classes.
   const anchors = new Map();
+  // classAnchors: for each class, the anchors whose mix holds it (as tkey numbers), kept as anchors are made, so a
+  // noise-globe spin can find that class's tiles without working out any tile's mix. Cleared with the anchors.
+  const classAnchors = new Map(), clearAnchorsOnly = anchors.clear.bind(anchors);
+  anchors.clear = () => { clearAnchorsOnly(); classAnchors.clear(); };
   function anchor(a, b) {
     const k = a + ',' + b; let n = anchors.get(k);
-    if (!n) { if (anchors.size > 200000) anchors.clear(); n = { z: gauss(Z, hash2(a, b, 13)), mix: softClassAt(a * SPAN + 0.5, b * SPAN + 0.5) }; anchors.set(k, n); }
+    if (!n) { if (anchors.size > 200000) anchors.clear(); n = { z: gauss(Z, hash2(a, b, 13)), mix: softClassAt(a * SPAN + 0.5, b * SPAN + 0.5) }; anchors.set(k, n);
+      for (const c in n.mix) { let S = classAnchors.get(+c); if (!S) classAnchors.set(+c, S = new Set()); S.add(tkey(a, b)); } }
     return n;
   }
   // A tile's class weights: bilinear over the four anchors around it (outside All classes they have none, so the rest
@@ -833,7 +838,7 @@ async function main() {
   // minimap (drawn every 250 ms: miniCalls), and the whole frame.
   const prof = BENCH ? { frames: 0, tiles: 0, labels: 0, mini: 0, miniCalls: 0, total: 0 } : null;
   if (prof) window.__prof = prof;
-  const pending = new Set();
+  const pending = new Set(), discard = new Set();  // discard: tiles in flight whose result is stale (see remakeClasses)
   const tierOf = (sd) => (sd <= 22 ? -1 : sd <= 44 ? 0 : sd <= 120 ? 1 : 2);
   // A tier whose store holds fewer tiles than the screen shows would evict tiles in view and make them again forever
   // (a 5K screen; a small device on a big monitor): then a coarser one.
@@ -893,7 +898,7 @@ async function main() {
           fails = 0;
           if (pv) {  // kept unless the tile was decoded meanwhile
             previews++;
-            if (ep === epoch && !(tiny.has(k) && !prevOnly.has(k)) && madeAt(i, j) < 2) {
+            if (ep === epoch && !discard.delete(k) && !(tiny.has(k) && !prevOnly.has(k)) && madeAt(i, j) < 2) {
               storePreview(k, bmp, i, j, r);
               if (latRaw !== raw0) showPreview(k);  // the raw-latents switch came while its bitmap was made
             } else bmp.close();
@@ -901,7 +906,7 @@ async function main() {
           }
           made++;
           if (dec === 'flux2') madeFlux++;
-          if (ep === epoch) { store(k, bmp, i, j); if (dec === 'flux2') refined.add(k); } else bmp.close();  // drop tiles made for old settings
+          if (ep === epoch && !discard.delete(k)) { store(k, bmp, i, j); if (dec === 'flux2') refined.add(k); } else bmp.close();  // drop tiles made for old settings (discard: its class's noise was spun meanwhile)
         })
         .catch(failed)
         .finally(() => { pending.delete(k); doneSince.add(k); if (pv) inflightP--; else inflight--; pump(); });
@@ -1019,8 +1024,34 @@ async function main() {
   // ---- the noise globe: one for every layout. The flat maps are its host unless the globe shows. ----
   NG = createNoiseGlobe({ G, Q, $, GD, sh });
   let spunAt = 0, spunWait = false;
-  function flatSpun() {
-    const go = () => { spunAt = performance.now(); spunWait = false; epoch++; remake(); };
+  // These classes' noise turned (null: every class's): on the flat maps, only the tiles holding them count as not
+  // decoded and are made again (each stays drawn till then); everything else keeps its image. A tile holds a class if
+  // one of the four anchors round it does. A spin calls this on every pointer event: it runs at most every 120 ms.
+  let spunSet = new Set(), spunAll = false, spunTiles = 0;
+  function remakeClasses(cs) {
+    const sets = cs.map((c) => classAnchors.get(c)).filter(Boolean); spunTiles = 0; if (!sets.length) return;
+    const holds = (i, j) => {
+      const a = Math.floor(i / SPAN), b = Math.floor(j / SPAN), k0 = tkey(a, b), k1 = tkey(a + 1, b), k2 = tkey(a, b + 1), k3 = tkey(a + 1, b + 1);
+      for (const S of sets) if (S.has(k0) || S.has(k1) || S.has(k2) || S.has(k3)) return true;
+      return false;
+    };
+    const mark = (k) => { const [i, j] = k.split(',').map(Number); if (!holds(i, j)) return; prevOnly.add(k); refined.delete(k); spunTiles++; };
+    for (const k of tiny.slot.keys()) mark(k);
+    for (const k of full.keys()) if (!prevOnly.has(k)) mark(k);
+    for (const k of pending) { const [i, j] = k.split(',').map(Number); if (holds(i, j)) discard.add(k); }
+    // ponytail: every tile of every block held (512 x 512 each; a few blocks in normal use, ~1 ms each); per-block lists of made tiles if a much-explored map makes spins slow
+    for (const B of blocks.values()) for (let t = 0; t < B.done.length; t++) {  // Conv alone: its latent is made again; else its decode
+      if (B.done[t] && (convOnly || B.done[t] === 2) && holds(B.a * BLK + t % BLK, B.b * BLK + Math.floor(t / BLK))) B.done[t] = convOnly ? 0 : 1;
+    }
+    G.dropLatents();  // kept for the old noise
+  }
+  function flatSpun(cs) {
+    if (cs) for (const c of cs) spunSet.add(c); else spunAll = true;
+    const go = () => {
+      spunWait = false; if (!spunAll && !spunSet.size) return;  // already done by a call that came first
+      spunAt = performance.now(); if (spunAll) { epoch++; remake(); } else remakeClasses([...spunSet]);
+      spunSet = new Set(); spunAll = false; tNear = 0; tFar = 0;
+    };
     if (performance.now() - spunAt > 120) go(); else if (!spunWait) { spunWait = true; setTimeout(go, 120); }
   }
   const flatHost = {
@@ -1029,9 +1060,7 @@ async function main() {
       const mix = classMix(i, j); if (!Object.keys(mix).length) return null;
       return { mix, q: NG.field(fieldPt(view.x, view.y)), id: i + ',' + j, z0: () => baseZ(i, j, 1) };
     },
-    // ponytail: a spin makes every flat tile again (at most every 120 ms); only the spun classes' tiles, as on the
-    // globe, if spins feel slow
-    spun(cs) { flatSpun(); if (gv) gv.spun(cs); },  // the globe too: its tiles of these classes are stale when it next shows
+    spun(cs) { flatSpun(cs); if (gv) gv.spun(cs); },  // the globe too: its tiles of these classes are stale when it next shows
     idle: () => !inflight && !inflightP && !want.length,
   };
   NG.attach(flatHost);
@@ -1706,7 +1735,7 @@ async function main() {
       noiseToURL(); window.__noise = NG.state();
       window.__path = { n: path.points.length, loop: !!path.loop, drawing: path.drawing, s: head.s, pen: !!pen, scrub: scrub !== null, view: [view.x, view.y, view.s], dot: (() => { const D = dotAt(performance.now()), q = D && pathScreen(D); return q ? [q[0], q[1]] : null; })(), dotShown: pathDot ? dotShown : '', arrow: pathDot && dotShown === 'arrow' ? arrowAt : null };  // for the tests
       if (html !== hudHTML) $('stats').innerHTML = hudHTML = html;
-      window.__v2 = { layout: globeOn ? 'globe' : look.layout, zoomPct: globeOn ? gv.zoomPct() : 100 * view.s / S100, held, viewTotal: C.viewTotal, left, made: C.made, previews: C.previews, epoch };
+      window.__v2 = { layout: globeOn ? 'globe' : look.layout, zoomPct: globeOn ? gv.zoomPct() : 100 * view.s / S100, held, viewTotal: C.viewTotal, left, made: C.made, previews: C.previews, epoch, spunTiles, tiles: tiny.slot.size };
     }
   }
   function frame(now) {
