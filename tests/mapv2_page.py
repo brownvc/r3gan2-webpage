@@ -78,6 +78,17 @@ with sync_playwright() as p:
     check(pressed('.dtog[data-d="conv"]') == 'true' and pressed('.dtog[data-d="taef2"]') == 'false' and pressed('.dtog[data-d="flux2"]') == 'false', 'only Conv is on')
     pg.wait_for_timeout(500); m2 = g()['made']; pg.keyboard.press('t'); pg.wait_for_timeout(4000); s = g()
     check(s['made'] == m2 and s['drawn'] >= 30, f"Conv alone: latents only ({s['drawn']} drawn, none decoded)")
+    # Conv alone, far out (more than 256 tiles in view): every tile still gets its latent
+    pg.keyboard.press('-'); pg.keyboard.press('-'); pg.wait_for_timeout(1500)
+    try: pg.wait_for_function(f'{V}.left === 0 && {V}.viewTotal > 300', timeout=90000); ok = True
+    except Exception: ok = False
+    check(ok, f"Conv alone, far out: all {v()['viewTotal']} tiles in view get a latent ({v()['left']} to go)")
+    # Conv alone: a new seed makes the latents shown again (no stale tiles)
+    p0 = g()['previews']; n0 = v()['viewTotal']; pg.click('#nnext'); pg.wait_for_timeout(500)
+    try: pg.wait_for_function(f'{G}.previews >= {p0} + 0.9 * {n0} && {V}.left === 0', timeout=90000); ok = True
+    except Exception: ok = False
+    check(ok, f"Conv alone: a new seed remakes the latents in view ({g()['previews'] - p0} of {n0})")
+    pg.keyboard.press('+'); pg.keyboard.press('+'); pg.wait_for_timeout(1200)
     pg.click('.dtog[data-d="taef2"]'); pg.wait_for_function(f'{G}.made > {m2}', timeout=120000); check(True, 'TAEF2 back on: tiles are decoded again')
     # M hides the noise globe
     pg.keyboard.press('m'); pg.wait_for_timeout(200); h = pg.evaluate("document.getElementById('gmini').offsetWidth"); pg.keyboard.press('m'); pg.wait_for_timeout(200)

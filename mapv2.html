@@ -1002,8 +1002,8 @@ async function main() {
     if (on) {
       gvBusy = true; showLook();
       try {
-        if (!gv) { status('Building the globe…'); await new Promise((r) => setTimeout(r, 30)); gv = await createGlobeView(globeEnv()); }
-        else if (gv.model !== G.model) { status('Loading the globe…'); await gv.loadModel(G.model); }
+        if (!gv) { status('Building the globe…'); await new Promise((r) => setTimeout(r, 30)); gv = await createGlobeView(globeEnv()); gv.settings('all'); }  // settings: any changed while it was built
+        if (gv.model !== G.model) { status('Loading the globe…'); await gv.loadModel(G.model); }
       } catch (e) { console.error(e); $('cfgnote').textContent = `The globe couldn’t start: ${e.message || e}`; status(''); gvBusy = false; showLook(); pump(); return; }
       status(''); gvBusy = false;
       setDraw(false); clearPath();
@@ -1760,7 +1760,8 @@ async function main() {
   // rates start a fresh window (else they would show far too fast); then filling resumes.
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) return;
-    tPrev = performance.now(); rateWin = { t: tPrev, made, busy, previews, busyP, gen: G.generated - pathGen, busyAny }; pump();
+    tPrev = performance.now(); pump();
+    if (globeOn) rateReset = true; else rateWin = { t: tPrev, made, busy, previews, busyP, gen: G.generated - pathGen, busyAny };  // the globe's counters are its own
   });
   const path = new Path({ step: 0.05 }), arrows = new Set();
   const ARROWS = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };

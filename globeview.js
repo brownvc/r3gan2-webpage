@@ -21,7 +21,7 @@ export async function createGlobeView(env) {
     for (let c = 0; c < C; c++) { axes.trace[c] = rec[c * 521]; axes.lambda.set(rec.subarray(c * 521 + 1, c * 521 + 9), c * 8); axes.U.set(rec.subarray(c * 521 + 9, c * 521 + 521), c * 512); }
     return { points: Float32Array.from(lay.points.flat()), n10: lay.neighbours10, axes, R0: Float32Array.from(aj.R0.flat()) };
   }
-  let GF = await globeFiles(G.model), model = G.model;
+  let model = G.model, GF = await globeFiles(model);  // the model as asked for: G.model may change during the fetch
 
   // ---- the tiling ----
   // Morphing: anchors every 1, 2, 4 or 8 cells are the tiling's vertices 0 to 3 levels coarser
@@ -273,6 +273,10 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
   // FLUX.2 decoder's. When every tile in view is made, the view is close in and left alone (env.refineOK), the tiles
   // in view are made again with the full decoder, nearest the centre first, one at a time, as on the flat maps.
   const rePv = new Set(), refined = new Set(); let refining = false, refinedN = 0;
+  // Conv alone: a cell's latent preview is all it gets, so it is made again whenever its inputs change. pvFor: the
+  // epoch each cell's preview was made for. needPv: the cell needs a latent preview (first, or again).
+  const pvFor = new Int32Array(N).fill(-1);
+  const needPv = (i) => !T16.slot.has(i) || rePv.has(i) || (sh.convOnly && made[i] !== epoch && pvFor[i] !== epoch);
   function refine(cells) {
     const cell = cells.find((c) => made[c] === epoch && !refined.has(c)); if (cell === undefined) return;
     refining = true; const ep = epoch, v = ver[cell];
@@ -286,7 +290,7 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     const pvSlots = G.preview ? G.previewSlots : 0;
     for (let k = 0; k < want.length && (inflight < G.slots || inflightP < pvSlots);) {
       const cell = want[k]; if (pending.has(cell)) { want.splice(k, 1); continue; }
-      const pv = pvSlots > 0 && (!T16.slot.has(cell) || rePv.has(cell));
+      const pv = pvSlots > 0 && needPv(cell);
       if (!pv && sh.convOnly) { want.splice(k, 1); continue; }  // Conv alone: the latents are all there is
       if (pv ? inflightP >= pvSlots : inflight >= G.slots) { k++; continue; }
       want.splice(k, 1); pending.add(cell); if (pv) inflightP++; else inflight++;
@@ -296,7 +300,7 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
       (pv ? G.preview(z, c, sh.NOISE, keep) : G.generate(z, c, sh.NOISE, undefined, keep))
         .then((r) => {
           env.ok(); if (ep !== epoch || v !== ver[cell]) return null;
-          if (pv) { previewsN++; rePv.delete(cell); return made[cell] === ep ? null : storePreview(cell, sh.latRaw ? r.raw : r.fit); }
+          if (pv) { previewsN++; rePv.delete(cell); pvFor[cell] = ep; return made[cell] === ep ? null : storePreview(cell, sh.latRaw ? r.raw : r.fit); }
           return store(cell, r).then(() => { made[cell] = ep; madeN++; if (dec === 'flux2') { madeFlux++; refined.add(cell); } else refined.delete(cell); });
         })
         .catch(env.fail)
@@ -310,7 +314,7 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     for (let i = 0; i < N; i++) {
       const m = mixCache[i]; if (!m) continue; madeCells++;
       if (!cs.some((c) => c in m)) continue;
-      ver[i]++; made[i] = -1; stale++; refined.delete(i);
+      ver[i]++; made[i] = -1; pvFor[i] = -1; stale++; refined.delete(i);
     }
     want = [];
   }
@@ -343,14 +347,16 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
       const mgn = rp * (1 + 3 * morphT);  // while reshaping, cells just past the edges too: drifting in, they fill them
       if (Math.abs(vx) > hw + mgn || Math.abs(vy) > hh + mgn) continue;
       inView++;
-      if (!T16.slot.has(i)) { leftP++; left++; } else if (!sh.convOnly && made[i] !== epoch) left++;
+      const nPv = needPv(i);
+      if (nPv) { leftP++; left++; } else if (!sh.convOnly && made[i] !== epoch) left++;
       if (vis) { vis.push(i); vpos.set(i, [vx, vy]); }
       if (vz > best) { best = vz; centreCell = i; }  // the point facing the viewer
       const cellPx = 2 * rp, need = tierFor(cellPx, lastInView, CAPS);
       const have = T256.slot.has(i) && need >= 2 ? 2 : T64.slot.has(i) && need >= 1 ? 1 : T16.slot.has(i) ? 0 : -1;
       if (wantRefine && have === 2) near2.push([vx * vx + vy * vy, i]);
       if (have >= 0 && n < MAXI) { const s = TIERS[have].slot.get(i); inst[4 * n] = i; inst[4 * n + 1] = have; inst[4 * n + 2] = s; n++; }
-      if ((made[i] !== epoch || have < need) && !pending.has(i)) cand.push([vx * vx + vy * vy, i]);
+      // Conv alone: only cells that need a latent are wanted (the rest would fill the queue and never leave it)
+      if ((sh.convOnly ? nPv : made[i] !== epoch || have < need) && !pending.has(i)) cand.push([vx * vx + vy * vy, i]);
     }
     drawn = n; lastInView = inView; gridded = 0;
     let gr = [1, 0, 0, 0];
