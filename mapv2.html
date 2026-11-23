@@ -1704,6 +1704,7 @@ async function main() {
       html += NG.lineHTML();  // the noise globe, when on: the centre class and what its 3 directions carry
       const code = NG.code(); if ($('ngcode').textContent !== code) { $('ngcode').textContent = code; $('ngcode').hidden = !code; }
       noiseToURL(); window.__noise = NG.state();
+      window.__path = { n: path.points.length, loop: !!path.loop, drawing: path.drawing, s: head.s, pen: !!pen, scrub: scrub !== null, view: [view.x, view.y, view.s], dot: (() => { const D = dotAt(performance.now()), q = D && pathScreen(D); return q ? [q[0], q[1]] : null; })(), dotShown: pathDot ? dotShown : '' };  // for the tests
       if (html !== hudHTML) $('stats').innerHTML = hudHTML = html;
       window.__v2 = { layout: globeOn ? 'globe' : look.layout, zoomPct: globeOn ? gv.zoomPct() : 100 * view.s / S100, held, viewTotal: C.viewTotal, left, made: C.made, previews: C.previews, epoch };
     }
@@ -1966,7 +1967,7 @@ async function main() {
   // The path over the map: a white line with a dark edge (readable on any tile), dashed over bridges, thicker round
   // a loop; when an endless path nears its cap, its oldest tenth fades in. Then the dot, or an arrow at the edge
   // pointing to it when it is off screen.
-  let accent = '';
+  let accent = '', dotShown = '';  // dotShown: how the dot was last drawn ('dot', or 'arrow' when off screen or round the back)
   const scrOut = [0, 0, true];
   // scr(p, o): where path point p shows on the canvas, written into o: [x, y, in front]. limb: the globe's radius on
   // the canvas (0 on the flat maps), for the arrow to a dot round the back.
@@ -1992,7 +1993,8 @@ async function main() {
     const D = dotAt(performance.now());
     if (D) {
       scr(D, o); let x = o[0], y = o[1]; const m = 14 * k;
-      if (o[2] && x >= 0 && x <= W2 && y >= 0 && y <= H2) {
+      dotShown = o[2] && x >= 0 && x <= W2 && y >= 0 && y <= H2 ? 'dot' : 'arrow';
+      if (dotShown === 'dot') {
         g2.beginPath(); g2.arc(x, y, DOT_R * k, 0, 2 * Math.PI); g2.fillStyle = accent; g2.fill();
         g2.lineWidth = 3 * k; g2.strokeStyle = '#ffffff'; g2.stroke();
       } else {  // off screen, or round the back of the globe: an arrow on the edge (or the globe's rim), pointing at it
