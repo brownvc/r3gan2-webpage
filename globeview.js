@@ -1,6 +1,6 @@
 // The class globe as a view of mapv2.html: globe.html's script as a module. The page owns the panel, the lab (G) and
 // the settings; this view reads them live through env.sh and is told when they change (settings, remake, loadModel).
-import { gauss, Z, SMALL_DEVICE } from './lab.js?v=20261122c';
+import { gauss, Z, SMALL_DEVICE } from './lab.js?v=20261122d';
 import { geodesic, classMix, tierFor, neighbours, gridTargets, anchorWeights, nearestSpacing } from './globe.js?v=20261122m';
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const ARROWS = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
