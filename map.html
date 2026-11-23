@@ -675,12 +675,17 @@ async function main() {
   // Only while the map is left alone: nothing pressed, scrolled or typed (map or panel) for IDLE_MS, and no fling
   // gliding. A decode already under way finishes (one tile, ~2 s).
   const refined = new Set(); let refining = false, fullOff = false, refinedN = 0, fits = null, lastInput = 0;
+  // Left alone: no button held, and no press, pointer move (hovering too), wheel or key for IDLE_MS.
+  let pressed = 0;
   const IDLE_MS = 1500, touched = () => { lastInput = performance.now(); };
-  for (const ev of ['pointerdown', 'wheel', 'keydown']) addEventListener(ev, touched, { passive: true, capture: true });
-  addEventListener('pointermove', (e) => { if (e.buttons) touched(); }, { passive: true, capture: true });
+  for (const ev of ['pointermove', 'wheel', 'keydown']) addEventListener(ev, touched, { passive: true, capture: true });
+  addEventListener('pointerdown', () => { pressed++; touched(); }, { passive: true, capture: true });
+  for (const ev of ['pointerup', 'pointercancel']) addEventListener(ev, () => { pressed = Math.max(0, pressed - 1); touched(); }, { passive: true, capture: true });
+  addEventListener('blur', () => { pressed = 0; });  // a release outside the window is never seen
+  const leftAlone = () => !pressed && performance.now() - lastInput >= IDLE_MS;
   function refine(i0, i1, j0, j1) {
     if (G.lost || refining || fullOff || !refineOn || convOnly || !avail.flux2 || G.options.decoder === 'flux2' || held || paused || switching || want.length || pending.size || animating) return;  // animating: the path's frames need the GPU
-    if (performance.now() - lastInput < IDLE_MS || vx || vy) return;  // the user is busy with the map
+    if (!leftAlone() || vx || vy) return;  // the user is busy with the map
     let best = Infinity, bi = 0, bj = 0;
     for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
       const k = i + ',' + j; if (!tileIn(i, j) || !full.has(k) || prevOnly.has(k) || refined.has(k)) continue;
@@ -1010,7 +1015,7 @@ async function main() {
   const globeEnv = () => ({
     G, Q, $, GD, S100, blocked, sh, NG, fail: failed, ok: () => { fails = 0; }, pen: gpen, overlay: drawGlobePath, spun: flatSpun,  // spun: the noise globe turned on the globe; the flat map's tiles are stale too
     // the full FLUX.2 decoder over TAEF2, as on the flat maps: only when it is on, fits, and the page is left alone
-    refineOK: () => !(G.lost || fullOff || !refineOn || convOnly || !avail.flux2 || G.options.decoder === 'flux2' || held || paused || switching || animating) && performance.now() - lastInput >= IDLE_MS,  // animating: the path's frames need the GPU
+    refineOK: () => !(G.lost || fullOff || !refineOn || convOnly || !avail.flux2 || G.options.decoder === 'flux2' || held || paused || switching || animating) && leftAlone(),  // animating: the path's frames need the GPU
     refineReady: () => (fits ??= G.fullFits().then((ok) => { if (!ok) throw new Error(noRoomMsg); })).then(() => G.loadFull()),
     refineFailed: (e) => {
       fullOff = true;
