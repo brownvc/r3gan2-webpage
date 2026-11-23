@@ -1,6 +1,6 @@
 // For map.html: createLab() gives a WebGPU device and a pipelined generator that can switch model, decoder and
 // precision; weights are kept in the same browser storage as the live generator.
-import { createFastGAN } from './fastgan.js?v=20261122c';
+import { createFastGAN } from './fastgan.js?v=20261122d';
 import { DATA } from './config.js';
 export { DATA };
 
@@ -190,7 +190,8 @@ export async function createLab({ onStatus = () => {}, onLost = () => {} } = {})
   // Firefox reports shader-f16 but its FP16 decoder never finishes (see index.html), so it runs FP32.
   // FP16 weights are uploaded as Float16Array (Chrome 135+): without it, FP32 even if the GPU has shader-f16.
   const hasF16 = adapter.features.has('shader-f16') && !/Firefox\//.test(navigator.userAgent) && typeof Float16Array === 'function';
-  const device = await adapter.requestDevice({ requiredFeatures: hasF16 ? ['shader-f16'] : [] });
+  // timestamp-query lets createFastGAN time its grouped-conv tilings on the GPU (gconvTune)
+  const device = await adapter.requestDevice({ requiredFeatures: [...(hasF16 ? ['shader-f16'] : []), ...(adapter.features.has('timestamp-query') ? ['timestamp-query'] : [])] });
   let lost = false, gpuErrors = 0;
   device.lost.then((info) => { lost = true; gpuLostNotice(info.message || info.reason); onLost(info); });
   device.addEventListener('uncapturederror', (e) => { if (gpuErrors++ < 3) console.warn('WebGPU error:', e.error.message); });  // a few, not every frame's

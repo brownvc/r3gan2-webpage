@@ -223,12 +223,14 @@ fn main(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_id) l: vec3u
 
 // Grouped 3x3 conv, vec4 version: workgroup = one 32-channel group x a TW x TH pixel tile; thread = PX pixels of a row
 // x 4 output channels (8 threads across the 32). Input tile in shared memory as vec4; weights read as vec4 (each feeds
-// 4 PX FMAs). The tile's shared memory (12.8 KB FP32 at 8 x 8) limits how many workgroups fit on a CU, so fewer pixels
-// per thread (more threads per tile) mostly wins: on an AMD 880M, 8 x 4 tiles with 2 pixels per thread were 1.1-2x
-// faster than 8 x 8 with 8 per thread, except FP16 at 32 x 32, where 8 x 8 / 8 stays best (gconvCfg).
+// 4 PX FMAs). Pixels per thread (PX) sets the balance: fewer means more threads, more means fewer weight loads per FMA.
+// The best PX depends on the GPU and precision, and tile shape matters little once PX is fixed (sweeps of every tiling
+// within WebGPU's default limits). At 32 x 32: NVIDIA TITAN Xp FP32 halved its time per doubling of PX up to 8 (load
+// bound; 16 best), an AMD 880M was best at 2 in FP32 and 4 in FP16. WebGPU exposes nothing that predicts this, so
+// createFastGAN times one tiling per PX step (gconvCands) once per GPU and map size and keeps the fastest (gconvTune).
 // Sums are unrolled into named variables: the looped array version gave wrong results at x = 0 and 4.
 // FP16: sums per tap (32 terms) in f16, added up in fp32 (FP16 sums over all 288 terms lost too much accuracy).
-const gconvCfg = (half, P) => (half && P >= 1024 ? { TW: 8, TH: 8, PX: 8 } : { TW: 8, TH: 4, PX: 2 });
+const gconvCands = (res) => [{ TW: 8, TH: 4, PX: 2 }, { TW: 8, TH: 8, PX: 4 }, { TW: 8, TH: 8, PX: 8 }, ...(res >= 16 ? [{ TW: 16, TH: 4, PX: 16 }] : [])];
 function gconvVCode({ TW, TH, PX }, half) {
   const HW = TW + 2, NP = (TH + 2) * HW, XS = TW / PX, NT = TH * XS * 8;
   return `
@@ -768,6 +770,11 @@ const VEC4 = !globalThis.location?.search?.includes('novec4');
 const POLY = !globalThis.location?.search?.includes('nopoly');  // TAEF2 upsample convs as 4 phase convs
 const GEMMT = !globalThis.location?.search?.includes('nogemmt');  // FP32 generator 1x1 convs: gemmTCode, not gemmVCode
 const WINO = !globalThis.location?.search?.includes('nowino');  // TAEF2 32² convs as Winograd F(2x2, 3x3) (FP16)
+// Grouped-conv tilings picked by timing (gconvTune), per GPU and precision: { [map size]: index into gconvCands }.
+// Saved in localStorage when there is one (not in workers); ?retune times them again.
+const gconvKey = (device, h) => { const i = device.adapterInfo || {}; return `r3gan2-gconv-1|${i.vendor}|${i.architecture}|${i.description}|${h ? 16 : 32}`; };
+const gconvLoad = (key) => { try { return globalThis.location?.search?.includes('retune') ? {} : JSON.parse(globalThis.localStorage?.getItem(key) || '{}'); } catch { return {}; } };
+const gconvSave = (key, v) => { try { globalThis.localStorage?.setItem(key, JSON.stringify(v)); } catch { /* storage off */ } };
 export async function createFastGAN(device, man, wbin, { half = false, gHalf = false } = {}) {
   WV2U = (half || gHalf) && await bitcastOK(device);
   const T = man.tensors;
@@ -798,10 +805,12 @@ export async function createFastGAN(device, man, wbin, { half = false, gHalf = f
   const pending = [];
   const uni = (a) => { const b = own(device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })); device.queue.writeBuffer(b, 0, new Uint32Array([...a, 0, 0, 0, 0].slice(0, 4))); return b; };
   const ops = [];
+  const bind = (p, binds) => device.createBindGroup({ layout: p.getBindGroupLayout(0), entries: Object.entries(binds).map(([k, buffer]) => ({ binding: +k, resource: { buffer } })) });
   const op = (kind, code, binds, wx, wy = 1, wz = 1) => {
     const o = { kind, wx, wy, wz };
     ops.push(o);
-    pending.push(pipe(code).then((p) => { o.p = p; o.bg = device.createBindGroup({ layout: p.getBindGroupLayout(0), entries: Object.entries(binds).map(([k, buffer]) => ({ binding: +k, resource: { buffer } })) }); }));
+    pending.push(pipe(code).then((p) => { o.p = p; o.bg = bind(p, binds); }));
+    return o;
   };
   const PART = 1 << 18;  // FP32 partial sums for split-K GEMMs (floats)
   let part = null;
@@ -858,6 +867,7 @@ export async function createFastGAN(device, man, wbin, { half = false, gHalf = f
   up(h3, x, 4, 4, widths[0]);
   const gh = gHalf && !rgb;  // generator trunk in FP16 (head and latent stay FP32); ImageNet only
   if (gh) { const x16 = buf(64 * widths[0]); op('G head', castCode('f32', 'f16'), { 0: x, 2: x16, 3: uni([64 * widths[0]]) }, Math.ceil(64 * widths[0] / 256)); x = x16; }
+  const gKey = gconvKey(device, gh), gSaved = gconvLoad(gKey), gTune = [];
   let hid = 0; { let r = 8; for (const C of widths) { hid = Math.max(hid, r * r * 2 * C); r *= 2; } }
   const y1 = buf(hid), y2 = buf(hid);
   for (let s = 0; s < widths.length; s++) {
@@ -866,8 +876,10 @@ export async function createFastGAN(device, man, wbin, { half = false, gHalf = f
       const p = `s${s}b${b}`;
       gemm('G 1x1 in', x, p + '.w1', y1, P, C, 2 * C, { bias: true, noise: true, lrelu: true, half: gh }, { bias: p + '.b1', s: p + '.s1', off });
       off += P;
-      const gc = gconvCfg(gh, P);
-      op('G grouped 3x3', th(VEC4 ? gconvVCode(gc, gh) : gconvCode, gh), { 0: y1, 1: W(p + '.w2', gh), 2: y2, 3: uni([res, res, 2 * C]) }, VEC4 ? P / (gc.TW * gc.TH) : P / 64, 2 * C / 32);
+      const gb = { 0: y1, 1: W(p + '.w2', gh), 2: y2, 3: uni([res, res, 2 * C]) }, cands = gconvCands(res);
+      const pick = cands[gSaved[res]], gc = pick || cands[1];  // until tuned: 8 x 8 / 4 px, middling everywhere
+      const o = op('G grouped 3x3', th(VEC4 ? gconvVCode(gc, gh) : gconvCode, gh), gb, VEC4 ? P / (gc.TW * gc.TH) : P / 64, 2 * C / 32);
+      if (VEC4 && !pick) gTune.push({ o, res, binds: gb, n: P * 2 * C });
       gemm('G 1x1 out', y2, p + '.w3', x, P, 2 * C, C, { resid: true, half: gh });
     }
     if (s < widths.length - 1) {
@@ -926,6 +938,56 @@ export async function createFastGAN(device, man, wbin, { half = false, gHalf = f
   await Promise.all(pending);
   return finish({ nG, lat, img, setInputs });
 
+  // Runs in the background once the network is returned; until it finishes, grouped convs use the default tiling.
+  // Compiles the candidate tilings, times each on the first grouped conv of each map size (several dispatches per pass,
+  // best of 3, output to a scratch buffer so frames in flight are untouched) and switches every grouped conv of that
+  // size to the fastest, between frames. Each candidate gives identical results; only speed differs. GPU timestamps
+  // when the device has them, else wall clock (which includes a submit round trip, so close candidates can swap).
+  // Once per GPU: about 0.1-0.3 s in Chrome. Firefox compiles shaders slowly: done before returning, the candidates
+  // added about 7 s to its first build.
+  async function gconvTune() {
+    const sizes = [...new Set(gTune.map((e) => e.res))];
+    if (!sizes.length) return;
+    const dead = () => !owned.length;  // destroy() ran: the buffers are gone
+    const ts = device.features.has('timestamp-query');
+    const qs = ts && device.createQuerySet({ type: 'timestamp', count: 2 });
+    const qb = ts && device.createBuffer({ size: 16, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC });
+    const qr = ts && device.createBuffer({ size: 16, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+    const time = async (c, wy, reps) => {
+      const enc = device.createCommandEncoder();
+      const pass = enc.beginComputePass(ts ? { timestampWrites: { querySet: qs, beginningOfPassWriteIndex: 0, endOfPassWriteIndex: 1 } } : {});
+      pass.setPipeline(c.p); pass.setBindGroup(0, c.bg);
+      for (let k = 0; k < reps; k++) pass.dispatchWorkgroups(c.wx, wy);
+      pass.end();
+      if (ts) { enc.resolveQuerySet(qs, 0, 2, qb, 0); enc.copyBufferToBuffer(qb, 0, qr, 0, 16); }
+      const t0 = performance.now();
+      device.queue.submit([enc.finish()]);
+      if (!ts) { await device.queue.onSubmittedWorkDone(); return performance.now() - t0; }
+      await qr.mapAsync(GPUMapMode.READ); const t = new BigInt64Array(qr.getMappedRange().slice(0)); qr.unmap();
+      return Number(t[1] - t[0]);
+    };
+    try {
+      for (const res of sizes) {
+        const list = gTune.filter((e) => e.res === res), { o, binds, n } = list[0], P = res * res;
+        const out = device.createBuffer({ size: n * 4, usage: GPUBufferUsage.STORAGE });
+        const runs = await Promise.all(gconvCands(res).map(async (g) => {
+          const p = await pipe(th(gconvVCode(g, gh), gh));
+          return { p, bg: bind(p, { ...binds, 2: out }), wx: P / (g.TW * g.TH) };
+        }));
+        const reps = Math.max(4, (ts ? 8192 : 16384) / P), best = runs.map(() => Infinity);  // a few ms per measurement
+        for (let r = 0; r < 3 && !dead(); r++) for (const [i, c] of runs.entries()) if (!dead()) best[i] = Math.min(best[i], await time(c, o.wy, reps));
+        out.destroy();
+        if (dead()) return;
+        const k = best.indexOf(Math.min(...best));
+        for (const e of list) { e.o.p = runs[k].p; e.o.bg = bind(runs[k].p, e.binds); e.o.wx = runs[k].wx; }
+        gSaved[res] = k;
+      }
+      gconvSave(gKey, gSaved);
+    } finally {
+      if (ts) { qs.destroy(); qb.destroy(); qr.destroy(); }
+    }
+  }
+
   function encode(enc, upTo, querySet, from = 0) {
     if (!querySet) {
       const pass = enc.beginComputePass();
@@ -952,6 +1014,10 @@ export async function createFastGAN(device, man, wbin, { half = false, gHalf = f
   }`;
     return {
     ops, nG, lat, img, setInputs,
+    // Grouped-conv tiling per map size, e.g. '8²:8x8/4px 16²:8x8/8px 32²:16x4/16px', and a promise that resolves once
+    // the background timing has picked them (at once when they came from localStorage): gconvTune
+    get tiling() { return Object.entries(gSaved).map(([r, k]) => { const g = gconvCands(+r)[k]; return g ? `${r}²:${g.TW}x${g.TH}/${g.PX}px` : ''; }).join(' '); },
+    tuned: gconvTune().catch((e) => console.warn('grouped-conv tuning stopped:', e.message)),
     // Draw the image buffer straight into a 256x256 WebGPU canvas: returns draw(encoder).
     attach(canvas) {
       const ctx = canvas.getContext('webgpu'), format = navigator.gpu.getPreferredCanvasFormat();
