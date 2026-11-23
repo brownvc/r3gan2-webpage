@@ -217,6 +217,7 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
       down() { vx = vy = 0; on = false; t = performance.now(); },
       move(dx, dy) { const now = performance.now(), dt = Math.max(1, now - t) / 1000; vx = 0.8 * vx + 0.2 * dx / dt; vy = 0.8 * vy + 0.2 * dy / dt; t = now; },
       up() { on = performance.now() - t <= 80 && Math.hypot(vx, vy) > 30; last = performance.now(); },
+      get on() { return on; },
       step() {
         const now = performance.now(), dt = Math.min(0.05, (now - last) / 1000); last = now; if (!on) return;
         apply(vx * dt, vy * dt); const k = Math.exp(-4 * dt); vx *= k; vy *= k; if (Math.hypot(vx, vy) < 4) on = false;
@@ -246,7 +247,7 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
   // first, as many in flight as the lab has slots ----
   // As on the map: a cell showing nothing gets its latent preview first (G.preview, 32 px, kept on the GPU for its
   // decode), then is decoded; previews and decodes each have their own slots, and both go nearest the centre first.
-  let inflight = 0, inflightP = 0, madeN = 0, madeFlux = 0, previewsN = 0, remadeN = 0, want = [], on = false, looping = false;
+  let inflight = 0, inflightP = 0, madeN = 0, madeFlux = 0, previewsN = 0, remadeN = 0, want = [], on = false, looping = false, movedAt = -1e9;
   let left = 0, leftP = 0, busy = 0, busyP = 0, busyAny = 0;  // for the readout: in view still to decode, still to preview; the stages' clocks
   const pending = new Set();
   // rePv: cells whose latent preview is made again (Conv switched on or off). refined: cells whose image is the full
@@ -267,11 +268,16 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
   }
   function pump() {
     if (!on || sh.held || sh.paused || G.lost || document.hidden) return;
+    // While the view moves (drag, flick, arrow keys, a zoom under way) only latents are made: each is cheap and gives the
+    // GPU back quickly, so the motion stays smooth; the decodes wait until 200 ms after it stops.
+    const cheap = sh.cheapMove && G.preview && performance.now() - movedAt < 200;
+    G.smooth = !!cheap;  // and each latent's GPU work is spread over frames (the lab's smooth mode)
     const pvSlots = G.preview ? G.previewSlots : 0;
     for (let k = 0; k < want.length && (inflight < G.slots || inflightP < pvSlots);) {
       const cell = want[k]; if (pending.has(cell)) { want.splice(k, 1); continue; }
       const pv = pvSlots > 0 && needPv(cell);
       if (!pv && sh.convOnly) { want.splice(k, 1); continue; }  // Conv alone: the latents are all there is
+      if (!pv && cheap) { k++; continue; }  // the view is moving: decodes wait
       if (pv ? inflightP >= pvSlots : inflight >= G.slots) { k++; continue; }
       want.splice(k, 1); pending.add(cell); if (pv) inflightP++; else inflight++;
       if (!pv && made[cell] === epoch) remadeN++;  // a sharper copy of a cell already made (its larger one was evicted)
@@ -317,6 +323,7 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     const S = zoom * dpr, sx = 2 * S / W, sy = 2 * S / H;
     morphT = smooth((2 * meanRad * zoom - 110) / 90);
     const vis = morphT > 0 ? [] : null, vpos = morphT > 0 ? new Map() : null;
+    if (pointers.size > 0 || globeFling.on || zoom !== zoomGoal || sh.arrows.size > 0) movedAt = now;
     const cand = []; let n = 0, best = -2; inView = 0; left = 0; leftP = 0;
     const wantRefine = !refining && env.refineOK(), near2 = [];
     const hw = W / 2, hh = H / 2;

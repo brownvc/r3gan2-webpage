@@ -866,10 +866,14 @@ async function main() {
   // in flight once the minimap stopped stalling the page, and smooth mode made 2.4x fewer tiles during the drag.
   const SMOOTH = Q.get('smooth') === '1';
   let lastWheel = -1e9;
+  // While the view moves (drag, pinch, glide, arrow keys, a zoom under way) only latents are made: each is cheap and
+  // gives the GPU back quickly, so the motion stays smooth; the decodes wait until it stops (move=full: no waiting).
+  const CHEAP_MOVE = Q.get('move') !== 'full'; let motionReady = false;  // motionReady: the input state below exists
+  const inMotion = () => CHEAP_MOVE && motionReady && (viewMoving(performance.now()) || !!zg);
   function moving() { return SMOOTH && (drag || !!pinch || !!(vx || vy) || performance.now() - lastWheel < 300); }
   function pump() {
     if (globeOn || gvBusy || paused || held || G.lost || document.hidden) return;  // hidden tab: no work (and none the rates would miss); the globe makes its own tiles (gvBusy: it is being built)
-    const mv = moving(); G.smooth = mv;
+    const mv = moving(), cheap = latFirst && inMotion(); G.smooth = mv;
     // while a path animates and its frames fall short of 30 a second, they go first: one tile (and one latent) at a time
     const slow = animating && pathSlow, slots = slow ? 1 : G.slots, pvSlots = slow ? 1 : G.previewSlots;
     const needPv = latFirst && (farLeft >= 0 ? farZeros > 0 : wantEmpty > 0);  // any wanted tile still to get its latent
@@ -877,6 +881,7 @@ async function main() {
       const [, i, j] = want[n], k = i + ',' + j;
       if (pending.has(k) || doneSince.has(k)) { want.splice(n, 1); continue; }  // doneSince: finished since want was collected
       const pv = latFirst && (convOnly || !tiny.has(k)) && !madeAt(i, j);  // nothing made yet: its latent first (Conv alone: also a latent made for older settings, see remake)
+      if (!pv && cheap) { n++; continue; }  // the view is moving: decodes wait
       if (mv ? inflight + inflightP >= 1 : pv ? inflightP >= pvSlots : inflight >= slots) {
         if (pv || mv || !needPv) break;  // decode slots full and no wanted tile needs a latent: nothing more can start
         n++; continue;
@@ -996,7 +1001,7 @@ async function main() {
     get psi() { return psi; }, get soft() { return look.soft; }, get span() { return gspan; },
     get noiseSeed() { return noiseSeed; }, get noiseStr() { return noiseStr; }, get NOISE() { return NOISE; },
     get held() { return held; }, get paused() { return paused || switching; },
-    get latRaw() { return latRaw; }, get convOnly() { return convOnly; }, get arrows() { return arrows; },
+    get latRaw() { return latRaw; }, get convOnly() { return convOnly; }, get arrows() { return arrows; }, cheapMove: CHEAP_MOVE,
   };
   const noRoomMsg = 'Zoomed in, tiles stay with TAEF2: the full decoder needs about 0.75 GB of GPU memory that does not seem free here.';
   const globeEnv = () => ({
@@ -2061,6 +2066,7 @@ async function main() {
   });
   addEventListener('keyup', (e) => arrows.delete(e.key));
   addEventListener('blur', () => arrows.clear());
+  motionReady = true;
   if (Q.get('ng') === '1' && gAvail[G.model]) await setNoiseGlobe(true);  // a link with the noise globe on
   if (Q.get('layout') === 'globe' && gAvail[G.model]) setGlobe(true);  // a link to the globe
 }
