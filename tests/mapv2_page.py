@@ -37,10 +37,16 @@ with sync_playwright() as p:
     pg.click('#zpct'); pg.wait_for_timeout(1200); check(abs(v()['zoomPct'] - 100) < 1, f"the % button returns to 100%: {v()['zoomPct']:.1f}")
     pg.wait_for_function(f'{V}.left === 0', timeout=120000); flat_made = v()['made']
 
+    # a path drawn on the flat map: it waits while the globe shows, and is back afterwards
+    shown = lambda i: pg.evaluate(f"document.getElementById('{i}').offsetWidth > 0")
+    pg.keyboard.press('d'); pg.mouse.move(cx - 150, cy); pg.mouse.down(); pg.mouse.move(cx + 150, cy + 40, steps=12); pg.mouse.up(); pg.keyboard.press('d'); pg.wait_for_timeout(600)
+    check(shown('pathwin'), 'a path is drawn and its window shows')
+
     # the globe
     pg.click('.lbtn[data-l="globe"]')
     pg.wait_for_function(f'{G} && {G}.on && {G}.drawn >= 50', timeout=180000); pg.wait_for_timeout(600)
     s = v(); check(s['layout'] == 'globe' and pressed('.lbtn[data-l="globe"]') == 'true', 'Globe shows')
+    check(not shown('pathwin'), 'the path window is out of sight on the globe')
     vis = pg.evaluate('''() => ['map', 'globe', 'labels', 'mini', 'gmini', 'minicap', 'minisize'].map((i) => document.getElementById(i).offsetWidth > 0)''')
     check(vis == [False, True, True, False, False, False, False], f'the globe takes the map\'s place; the noise globe is off by default: {vis}')
     dis = pg.evaluate('''() => ['size', 'draw', 'fillk', 'span', 'soft', 'trunc', 'pause', 'teleport', 'zin'].map((i) => document.getElementById(i).disabled)''')
@@ -118,6 +124,7 @@ with sync_playwright() as p:
     pg.click('.lbtn[data-l="all"]'); pg.wait_for_timeout(1500); s = v()
     check(s['layout'] == 'all' and s['made'] >= flat_made and pg.evaluate("document.getElementById('map').offsetWidth") > 0, f"back on All classes with its tiles kept: {s['made']} made (was {flat_made})")
     check(not pg.evaluate("document.getElementById('size').disabled || document.getElementById('draw').disabled"), 'Region size and Draw work again')
+    check(shown('pathwin'), 'the drawn path and its window are back'); pg.click('#pathclear')
     q = dict(kv.split('=') for kv in pg.url.split('?')[1].split('&'))
     check(q.get('layout') == 'all' and 'x' in q and abs(float(q['zoom']) - 84) < 1, f"the link is the flat map's again: layout {q.get('layout')}, zoom {q.get('zoom')}")
     # quick toggles: one draw loop, not two (frames per second stay at the screen's rate)

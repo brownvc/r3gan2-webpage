@@ -1052,10 +1052,11 @@ async function main() {
         if (gv.model !== G.model) { status('Loading the globe…'); await gv.loadModel(G.model); }
       } catch (e) { console.error(e); $('cfgnote').textContent = `The globe couldn’t start: ${e.message || e}`; status(''); gvBusy = false; showLook(); pump(); return; }
       status(''); gvBusy = false;
-      setDraw(false); clearPath();
+      setDraw(false); win.hidden = true;  // a drawn path waits, paused and out of sight, until the flat map is back
       globeOn = true; wrap.classList.add('onglobe'); cv.hidden = true; $('globe').hidden = false; $('labels').hidden = false; showMinis(); gv.show();
     } else {
       gv.hide(); globeOn = false; wrap.classList.remove('onglobe'); NG.attach(flatHost); $('globe').hidden = true; $('labels').hidden = true; cv.hidden = false; showMinis();
+      if (path.points.length) { win.hidden = false; animate(); }  // the path and its animation, back as they were
       tNear = 0; tFar = 0; lastView = '';  // the link takes the flat view again (its zoom was the globe's)
       pump();
     }
@@ -1868,7 +1869,7 @@ async function main() {
     try {
       let lastP = null, tLast = performance.now(), frameMs = 1000 / PATH_HZ;
       // scrubbing makes frames even when paused (the window's Pause or the map's P); 'paused' is a settings switch under way
-      while (((playing && !held) || scrub !== null) && !paused && !G.lost && path.points.length) {
+      while (((playing && !held) || scrub !== null) && !paused && !globeOn && !G.lost && path.points.length) {
         let now = performance.now();
         while (now - tLast < 1000 / PATH_HZ - 2) { await new Promise((r) => requestAnimationFrame(r)); now = performance.now(); }
         const dt = Math.min(0.25, (now - tLast) / 1000);
