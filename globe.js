@@ -62,9 +62,10 @@ export function geodesic(levels, anchorLevel) {
 
 // A cell's anchors (as the map's, an anchor image every few tiles): the 3 corners of the coarse triangle it lies in,
 // weighted by its barycentric coordinates there (1 on itself for a cell that is an anchor). -> [[anchor, weight] x3]
-export function anchorWeights(g, i) {
+// p (optional): a point near cell i, to blend at instead of the cell's centre (a path's frames between cells).
+export function anchorWeights(g, i, p0) {
   const k = g.anchorOf[i], [a, b, c] = [g.anchorTri[3 * k], g.anchorTri[3 * k + 1], g.anchorTri[3 * k + 2]];
-  const v = (j) => [g.centres[3 * j], g.centres[3 * j + 1], g.centres[3 * j + 2]], p = v(i), A = v(a), B = v(b), C = v(c);
+  const v = (j) => [g.centres[3 * j], g.centres[3 * j + 1], g.centres[3 * j + 2]], p = p0 || v(i), A = v(a), B = v(b), C = v(c);
   const cr = (x, y) => [x[1] * y[2] - x[2] * y[1], x[2] * y[0] - x[0] * y[2], x[0] * y[1] - x[1] * y[0]], dt = (x, y) => x[0] * y[0] + x[1] * y[1] + x[2] * y[2];
   const det = dt(A, cr(B, C)), w = [dt(p, cr(B, C)) / det, dt(p, cr(C, A)) / det, dt(p, cr(A, B)) / det].map((x) => Math.max(0, x));
   const s = w[0] + w[1] + w[2];

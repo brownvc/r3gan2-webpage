@@ -3,7 +3,7 @@
 // tile a point, and each class turns that point by its own rotation. Spinning the small globe turns the rotation of
 // the class its caption names (the class at the view's centre); with Shift, of every class. Off, tiles keep their
 // purely random noise and nothing here runs.
-import { geodesic, directions, tileZ, noiseField, noisePoint } from './globe.js?v=20261122l';
+import { geodesic, directions, tileZ, noiseField, noisePoint } from './globe.js?v=20261122m';
 
 const unit = (v) => { const r = Math.hypot(...v) || 1; return v.map((x) => x / r); };
 const mul = (A, B) => [0, 1, 2].flatMap((i) => [0, 1, 2].map((j) => A[3 * i] * B[j] + A[3 * i + 1] * B[3 + j] + A[3 * i + 2] * B[6 + j]));

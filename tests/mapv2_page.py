@@ -46,11 +46,21 @@ with sync_playwright() as p:
     pg.click('.lbtn[data-l="globe"]')
     pg.wait_for_function(f'{G} && {G}.on && {G}.drawn >= 50', timeout=180000); pg.wait_for_timeout(600)
     s = v(); check(s['layout'] == 'globe' and pressed('.lbtn[data-l="globe"]') == 'true', 'Globe shows')
-    check(not shown('pathwin'), 'the path window is out of sight on the globe')
+    check(not shown('pathwin'), "the flat map's path is out of sight on the globe")
+    # drawing on the globe: D, a drag draws (the globe does not turn), the window plays frames along it; the dot scrubs
+    ink = "() => { const d = document.getElementById('pathcv').getContext('2d').getImageData(0, 0, 256, 256).data; let n = 0; for (let i = 0; i < d.length; i += 4) n += d[i] + d[i + 1] + d[i + 2] > 30; return n; }"
+    line = "() => { const c = document.getElementById('labels'), d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 0; i < d.length; i += 4) n += d[i] > 250 && d[i + 1] > 250 && d[i + 2] > 250 && d[i + 3] > 250; return n; }"
+    w0 = pg.evaluate(line); r0 = g()['rot']
+    pg.keyboard.press('d'); pg.mouse.move(cx - 160, cy + 60); pg.mouse.down(); pg.mouse.move(cx + 160, cy + 120, steps=14); pg.mouse.up(); pg.keyboard.press('d'); pg.wait_for_timeout(2500)
+    check(g()['rot'] == r0 and shown('pathwin') and pg.evaluate(ink) > 20000, f'a path drawn on the globe: the globe stays put, the window plays frames ({pg.evaluate(ink)} px drawn)')
+    check(pg.evaluate(line) > w0 + 300, f'the path shows on the globe: {pg.evaluate(line) - w0} more white px')
+    pg.mouse.move(cx, cy - 150); pg.mouse.down(); pg.mouse.move(cx + 90, cy - 120, steps=8); pg.wait_for_timeout(150); pg.mouse.up(); pg.wait_for_timeout(400)
+    check(g()['rot'] != r0 and pg.evaluate(line) > w0 + 300, 'out of Draw mode a drag turns the globe, and the path turns with it')
+    pg.click('#pathclear'); pg.wait_for_timeout(300); check(not shown('pathwin') and pg.evaluate(line) < w0 + 300, 'Clear removes it')
     vis = pg.evaluate('''() => ['map', 'globe', 'labels', 'mini', 'gmini', 'minicap', 'minisize'].map((i) => document.getElementById(i).offsetWidth > 0)''')
     check(vis == [False, True, True, False, False, False, False], f'the globe takes the map\'s place; the noise globe is off by default: {vis}')
     dis = pg.evaluate('''() => ['size', 'draw', 'fillk', 'span', 'soft', 'trunc', 'pause', 'teleport', 'zin'].map((i) => document.getElementById(i).disabled)''')
-    check(dis == [True, True, True, False, False, False, False, False, False], f'Region size, Draw and Fill are off on the globe; the rest work: {dis}')
+    check(dis == [True, False, True, False, False, False, False, False, False], f'Region size and Fill are off on the globe; the rest work: {dis}')
     txt = pg.inner_text('#stats'); check('This view' in txt and 'Generated' in txt and 'Centre:' not in txt, f'the map\'s readout on the globe: {txt[:60]!r}...')
     check('layout=globe' in pg.url and 'rot=' in pg.url, 'the link carries the globe and its view')
     check(abs(s['zoomPct'] - 100) < 2, f"the globe starts at 100%: {s['zoomPct']:.1f}")

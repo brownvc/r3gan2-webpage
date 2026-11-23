@@ -94,6 +94,13 @@ const tests = {
       if (i < na) assert.ok(w.some(([a, x]) => a === i && Math.abs(x - 1) < 1e-6), `anchor ${i} is not its own`);
     }
   },
+  anchorsAtAPoint() {  // a point between cells blends the same anchors, smoothly: at an anchor it is that anchor alone
+    const ga = geodesic(7, 5), i = 90000, w0 = anchorWeights(ga, i), [a] = w0[0];
+    const at = anchorWeights(ga, i, vec(ga.centres, a));
+    assert.ok(at.some(([k, x]) => k === a && Math.abs(x - 1) < 1e-6), `at an anchor: ${JSON.stringify(at)}`);
+    const c = vec(ga.centres, i), A = vec(ga.centres, a), mid = unit([0, 1, 2].map((t) => c[t] + 0.5 * (A[t] - c[t]))), wm = anchorWeights(ga, i, mid);
+    assert.ok(Math.abs(wm.reduce((s, [, x]) => s + x, 0) - 1) < 1e-6 && wm[0][1] > w0[0][1] && wm[0][1] < 1, `halfway to an anchor its weight lies between: ${w0[0][1]} < ${wm[0][1]} < 1`);
+  },
   anchorLevels() {  // Morphing's stops (mapv2): anchors every 1, 2 or 8 cells are the tiling 0, 1 or 3 levels coarser
     for (const [L, every] of [[7, 1], [6, 2], [4, 8]]) {
       const ga = geodesic(7, L), na = 10 * 4 ** L + 2;

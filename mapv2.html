@@ -29,9 +29,9 @@
   .mapwrap { position: relative; flex: 1; min-height: 0; background: #000; font-size: 16px; line-height: 1.5; }
   #map { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
   #map.drag { cursor: grabbing; }
-  #map.pen { cursor: crosshair; }
-  #map.ondot { cursor: pointer; }  /* over the path's dot: drag it to scrub */
-  #map.scrub { cursor: grabbing; }
+  #map.pen, #globe.pen { cursor: crosshair; }
+  #map.ondot, #globe.ondot { cursor: pointer; }  /* over the path's dot: drag it to scrub */
+  #map.scrub, #globe.scrub { cursor: grabbing; }
   /* Overlays on the map keep a fixed dark backdrop in both themes, like the ones on index.html's image. */
   #status { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); max-width: calc(100% - 40px);
     padding: 10px 16px; border-radius: 8px; background: rgba(33, 37, 41, 0.88); color: #E8B04A; font-weight: 600; text-align: center; }
@@ -326,8 +326,8 @@
 <script type="module">
 import { createLab, MODELS, weightsFile, fileExists, savedInBrowser, gauss, hash2, rng, Z, fmt, DATA, SMALL_DEVICE } from './lab.js?v=20261122c';
 import { Path, Playhead } from './path.js?v=20261120b';
-import { createGlobeView } from './globeview.js?v=20261122c';
-import { createNoiseGlobe } from './noiseglobe.js?v=20261122a';
+import { createGlobeView } from './globeview.js?v=20261122d';
+import { createNoiseGlobe } from './noiseglobe.js?v=20261122b';
 const $ = (id) => document.getElementById(id);
 
 // Classes for the regions: visually distinct, and pleasant to blend between.
@@ -971,9 +971,8 @@ async function main() {
       if (l === 'globe' && !gAvail[G.model]) b.title = `The globe for ${MODELS[G.model] ? MODELS[G.model].label : 'this model'} isn’t available here.`;
     });
     // What the globe does not have is switched off there, not hidden, so the panel keeps its shape: region size (the
-    // model's class codes place the classes), drawing a path, and the fill orders.
-    $('size').disabled = globeOn; $('draw').disabled = globeOn; $('fillk').disabled = globeOn;
-    $('drawtxt').textContent = globeOn ? 'On the flat maps only' : 'Draw a path to animate; right-click clears';
+    // model's class codes place the classes) and the fill orders.
+    $('size').disabled = globeOn; $('fillk').disabled = globeOn;
     if (globeOn) $('filltxt').textContent = 'Nearest (the globe’s only order)'; else if (gv) $('filltxt').textContent = FILLS[fill][1];  // gv: not on the first call, before FILLS exists
     $('noiserow').hidden = !(NG && NG.on);
     $('globenote').hidden = !globeOn;
@@ -1005,7 +1004,7 @@ async function main() {
   };
   const noRoomMsg = 'Zoomed in, tiles stay with TAEF2: the full decoder needs about 0.75 GB of GPU memory that does not seem free here.';
   const globeEnv = () => ({
-    G, Q, $, GD, S100, blocked, sh, NG, fail: failed, ok: () => { fails = 0; },
+    G, Q, $, GD, S100, blocked, sh, NG, fail: failed, ok: () => { fails = 0; }, pen: gpen, overlay: drawGlobePath,
     // the full FLUX.2 decoder over TAEF2, as on the flat maps: only when it is on, fits, and the page is left alone
     refineOK: () => !(G.lost || fullOff || !refineOn || convOnly || !avail.flux2 || G.options.decoder === 'flux2' || held || paused || switching) && performance.now() - lastInput >= IDLE_MS,
     refineReady: () => (fits ??= G.fullFits().then((ok) => { if (!ok) throw new Error(noRoomMsg); })).then(() => G.loadFull()),
@@ -1052,11 +1051,10 @@ async function main() {
         if (gv.model !== G.model) { status('Loading the globe…'); await gv.loadModel(G.model); }
       } catch (e) { console.error(e); $('cfgnote').textContent = `The globe couldn’t start: ${e.message || e}`; status(''); gvBusy = false; showLook(); pump(); return; }
       status(''); gvBusy = false;
-      setDraw(false); win.hidden = true;  // a drawn path waits, paused and out of sight, until the flat map is back
-      globeOn = true; wrap.classList.add('onglobe'); cv.hidden = true; $('globe').hidden = false; $('labels').hidden = false; showMinis(); gv.show();
+      globeOn = true; wrap.classList.add('onglobe'); cv.hidden = true; $('globe').hidden = false; $('labels').hidden = false; showMinis(); gv.show(); swapPath();
     } else {
       gv.hide(); globeOn = false; wrap.classList.remove('onglobe'); NG.attach(flatHost); $('globe').hidden = true; $('labels').hidden = true; cv.hidden = false; showMinis();
-      if (path.points.length) { win.hidden = false; animate(); }  // the path and its animation, back as they were
+      swapPath();
       tNear = 0; tFar = 0; lastView = '';  // the link takes the flat view again (its zoom was the globe's)
       pump();
     }
@@ -1824,11 +1822,41 @@ async function main() {
     tPrev = performance.now(); pump();
     if (globeOn) rateReset = true; else rateWin = { t: tPrev, made, busy, previews, busyP, gen: G.generated - pathGen, busyAny };  // the globe's counters are its own
   });
-  const path = new Path({ step: 0.05 }), arrows = new Set();
+  let path = new Path({ step: 0.05 }); const arrows = new Set();
+  // Each layout has its own path: the flat maps' in their world (tiles), the globe's in a flat chart round the point
+  // where it began (chart: that point and two directions; distances from it are true, in tiles). The one not showing
+  // waits in otherPath, paused, and is back when its layout is (swapPath).
+  let otherPath = { path: new Path({ step: 0.05 }), head: null, pathDot: null }, chart = null;
+  const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  function newChart(o) {
+    const a = Math.abs(o[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0], d = dot3(a, o), t = a.map((x, i) => x - d * o[i]), n = Math.hypot(...t), e1 = t.map((x) => x / n);
+    chart = { o, e1, e2: [o[1] * e1[2] - o[2] * e1[1], o[2] * e1[0] - o[0] * e1[2], o[0] * e1[1] - o[1] * e1[0]] };
+  }
+  function toChart(p) {  // a point of the globe -> the path's coordinates
+    const c = Math.max(-1, Math.min(1, dot3(chart.o, p))), t = p.map((x, i) => x - c * chart.o[i]), n = Math.hypot(...t);
+    if (n < 1e-9) return { x: 0, y: 0 };
+    const r = Math.acos(c) / gv.tileAngle / n; return { x: r * dot3(t, chart.e1), y: r * dot3(t, chart.e2) };
+  }
+  function fromChart(q) {
+    const r = Math.hypot(q.x, q.y); if (r < 1e-12) return chart.o;
+    const a = r * gv.tileAngle, ca = Math.cos(a), sa = Math.sin(a) / r;
+    return [0, 1, 2].map((i) => ca * chart.o[i] + sa * (q.x * chart.e1[i] + q.y * chart.e2[i]));
+  }
+  // A path point's inputs (a frame of the animation), and where it shows (CSS px in the canvas; null: behind the globe)
+  const pathInputs = (p) => (globeOn ? gv.inputsAt(fromChart(p)) : tileInputs(p.x - 0.5, p.y - 0.5));  // tile i spans [i, i+1]
+  const pathScreen = (p) => { if (!globeOn) return [(p.x - view.x) * view.s + cssW / 2, (p.y - view.y) * view.s + cssH / 2]; const q = gv.project(fromChart(p)); return q[2] > 0 ? q : null; };
+  const globeWorld = (px, py) => { const p = gv.pick(px, py); return p && chart ? toChart(p) : null; };
+  function swapPath() {
+    if (pen) endPen(); scrub = null;
+    const cur = { path, head, pathDot }; ({ path, head, pathDot } = otherPath); otherPath = cur;
+    head ||= new Playhead(path); dotA = null; segKey = '';
+    win.hidden = !path.points.length; pcx.clearRect(0, 0, 256, 256);
+    if (!win.hidden) { placeWin(); animate(); }
+  }
   const ARROWS = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
   const toWorld = (px, py) => [view.x + (px - cssW / 2) / view.s, view.y + (py - cssH / 2) / view.s];
   function setDraw(on) {
-    drawMode = on; $('draw').setAttribute('aria-pressed', String(on)); cv.classList.toggle('pen', on);
+    drawMode = on; $('draw').setAttribute('aria-pressed', String(on)); cv.classList.toggle('pen', on); $('globe').classList.toggle('pen', on);
     if (!on && pen) { endPen(); }
   }
   function endPen() { if (pen.on) path.penUp(); ptrs.delete(pen.id); pen = null; }
@@ -1852,10 +1880,10 @@ async function main() {
   // another class counts as 1 radian). Cached per path and per map settings (truncation, noise etc. change z).
   const segD = new Map(); let segKey = '';
   function segDist(k) {
-    const key = `${path.epoch}|${epoch}`; if (key !== segKey) { segD.clear(); segKey = key; }
+    const key = `${path.epoch}|${epoch}|${globeOn ? gv.epoch : ''}`; if (key !== segKey) { segD.clear(); segKey = key; }
     let d = segD.get(k); if (d !== undefined) return d;
     const a = path.point(k), b = path.point(k + 1); if (!a || !b) return 1e-6;
-    const A = tileInputs(a.x - 0.5, a.y - 0.5), B = tileInputs(b.x - 0.5, b.y - 0.5);
+    const A = pathInputs(a), B = pathInputs(b);
     let dot = 0, na = 0, nb = 0; for (let i = 0; i < Z; i++) { dot += A.z[i] * B.z[i]; na += A.z[i] * A.z[i]; nb += B.z[i] * B.z[i]; }
     let tv = 0; for (const c of new Set([...Object.keys(A.mix), ...Object.keys(B.mix)])) tv += Math.abs((A.mix[c] || 0) - (B.mix[c] || 0));
     d = Math.max(1e-6, Math.acos(Math.max(-1, Math.min(1, dot / (Math.sqrt(na * nb) || 1)))) + tv / 2);
@@ -1869,7 +1897,7 @@ async function main() {
     try {
       let lastP = null, tLast = performance.now(), frameMs = 1000 / PATH_HZ;
       // scrubbing makes frames even when paused (the window's Pause or the map's P); 'paused' is a settings switch under way
-      while (((playing && !held) || scrub !== null) && !paused && !globeOn && !G.lost && path.points.length) {
+      while (((playing && !held) || scrub !== null) && !paused && !G.lost && path.points.length) {
         let now = performance.now();
         while (now - tLast < 1000 / PATH_HZ - 2) { await new Promise((r) => requestAnimationFrame(r)); now = performance.now(); }
         const dt = Math.min(0.25, (now - tLast) / 1000);
@@ -1878,7 +1906,7 @@ async function main() {
         const h = head, ep = path.epoch, k = Math.max(path.base, Math.min(path.tip - 1, Math.floor(h.s)));
         const p = scrub !== null ? h.at() : h.advance(Math.min(400, +$('pathspeed').value * dt / segDist(k)));  // scrubbing: where the dot is; else this frame's latent distance, in path points here
         if (lastP && p.x === lastP.x && p.y === lastP.y) { await new Promise((r) => requestAnimationFrame(r)); continue; }  // still: nothing new to make
-        const { z, mix } = tileInputs(p.x - 0.5, p.y - 0.5);  // tile i spans [i, i+1]
+        const { z, mix } = pathInputs(p);
         const img = await G.generate(z, Float32Array.from(G.classVec(mix)), NOISE, 'taef2');  // TAEF2 always, as the map's own decoder may be FLUX.2
         pathGen++;
         if (h !== head || ep !== path.epoch || !path.points.length) { lastP = null; continue; }  // cleared or restarted meanwhile
@@ -1976,9 +2004,10 @@ async function main() {
   // ---- the dot: drag it along the path to scrub (any mode); it then plays on from where it is let go ----
   const DOT_R = 8;  // CSS px
   let scrub = null;
-  const onDot = (px, py) => { const D = dotAt(performance.now()); return D && Math.hypot((D.x - view.x) * view.s + cssW / 2 - px, (D.y - view.y) * view.s + cssH / 2 - py) <= DOT_R + 8; };
+  const onDot = (px, py) => { const D = dotAt(performance.now()), q = D && pathScreen(D); return q && Math.hypot(q[0] - px, q[1] - py) <= DOT_R + 8; };
   function scrubTo(px, py) {  // the playhead to the point of the path nearest the pointer
-    const [wx, wy] = toWorld(px, py), P = path.points; let best = Infinity, bs = head.s;
+    const w = globeOn ? globeWorld(px, py) : { x: toWorld(px, py)[0], y: toWorld(px, py)[1] }; if (!w) return;  // off the globe
+    const wx = w.x, wy = w.y, P = path.points; let best = Infinity, bs = head.s;
     for (let k = 0; k + 1 < P.length; k++) {
       const a = P[k], b = P[k + 1], ux = b.x - a.x, uy = b.y - a.y, L = ux * ux + uy * uy;
       const t = L ? Math.max(0, Math.min(1, ((wx - a.x) * ux + (wy - a.y) * uy) / L)) : 0;
@@ -1986,6 +2015,51 @@ async function main() {
       if (d < best) { best = d; bs = path.base + k + t; }
     }
     head.s = bs; head.arrived = !path.drawing; pathDot = head.at(); dotA = null;
+  }
+
+  // ---- the path tool on the globe: the globe view offers each pointer here first (globeview.js: env.pen) and calls
+  // drawGlobePath over its labels. A drag on the dot scrubs; in Draw mode a drag draws (right button: clears). ----
+  const gcv = $('globe');
+  const gpen = {
+    down(px, py, e) {
+      if (onDot(px, py)) { scrub = e.pointerId; gcv.classList.add('scrub'); scrubTo(px, py); animate(); return true; }
+      if (!drawMode) return false;
+      if (e.button !== 2) pen = { id: e.pointerId, x: px, y: py, x0: px, y0: py, on: false };
+      return true;
+    },
+    move(px, py, e) {
+      if (e.pointerId === scrub) { scrubTo(px, py); return; }
+      if (!pen || e.pointerId !== pen.id) return;
+      pen.x = px; pen.y = py;
+      if (!pen.on) {  // the stroke begins once the pointer has moved 6 px, at 4 px between points
+        if (Math.hypot(px - pen.x0, py - pen.y0) < 6) return;
+        const p0 = gv.pick(pen.x0, pen.y0); if (!p0) return;
+        if (!path.points.length) newChart(p0);
+        const c = toChart(p0); pen.on = true; path.penDown(c.x, c.y, 4 / gv.tilePx()); onPathStart();
+      }
+      const c = globeWorld(px, py); if (c) path.penMove(c.x, c.y);
+    },
+    up(e) {
+      if (e.pointerId === scrub) { scrub = null; gcv.classList.remove('scrub'); }
+      else if (pen && e.pointerId === pen.id) { if (pen.on) path.penUp(); pen = null; }
+    },
+    hover(px, py) { gcv.classList.toggle('ondot', !!onDot(px, py)); },
+  };
+  gcv.addEventListener('contextmenu', (e) => { if (drawMode) { e.preventDefault(); clearPath(); } });  // Draw mode stays on
+  // The path on the globe: the white line with a dark edge, broken where it goes round the back, then the dot.
+  function drawGlobePath(g2, k) {
+    const P = path.points, n = P.length;
+    if (n < 2 && !pathDot) return;
+    accent ||= getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#C00404';
+    g2.save(); g2.lineCap = 'round'; g2.lineJoin = 'round';
+    for (const [col, wid] of [['rgba(20,20,20,0.85)', 6 * k], ['#ffffff', 3 * k]]) {
+      g2.beginPath(); let on = false;
+      for (let q = 0; q < n; q++) { const v = pathScreen(P[q]); if (!v) { on = false; continue; } if (on) g2.lineTo(v[0] * k, v[1] * k); else g2.moveTo(v[0] * k, v[1] * k); on = true; }
+      g2.strokeStyle = col; g2.lineWidth = wid; g2.stroke();
+    }
+    const D = dotAt(performance.now()), v = D && pathScreen(D);
+    if (v) { g2.beginPath(); g2.arc(v[0] * k, v[1] * k, DOT_R * k, 0, 2 * Math.PI); g2.fillStyle = accent; g2.fill(); g2.lineWidth = 3 * k; g2.strokeStyle = '#ffffff'; g2.stroke(); }
+    g2.restore();
   }
 
   // ---- input: drag, fling, wheel and pinch zoom (positions relative to the canvas) ----
@@ -2061,7 +2135,7 @@ async function main() {
     else if (e.key === 'm' || e.key === 'M') toggleMini();
     else if (e.key === '+' || e.key === '=') zoomBy(1.5);
     else if (e.key === '-' || e.key === '_') zoomBy(1 / 1.5);
-    else if (e.key === 'd' || e.key === 'D') { if (!globeOn) setDraw(!drawMode); }  // flat maps only
+    else if (e.key === 'd' || e.key === 'D') setDraw(!drawMode);
     else if (e.key === 'Escape') setDraw(false);
     else if (ARROWS[e.key]) { arrows.add(e.key); e.preventDefault(); }
   });

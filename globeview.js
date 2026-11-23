@@ -1,7 +1,7 @@
 // The class globe as a view of mapv2.html: globe.html's script as a module. The page owns the panel, the lab (G) and
 // the settings; this view reads them live through env.sh and is told when they change (settings, remake, loadModel).
 import { gauss, Z, SMALL_DEVICE } from './lab.js?v=20261122c';
-import { geodesic, classMix, tierFor, neighbours, gridTargets, anchorWeights, nearestSpacing } from './globe.js?v=20261122l';
+import { geodesic, classMix, tierFor, neighbours, gridTargets, anchorWeights, nearestSpacing } from './globe.js?v=20261122m';
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const ARROWS = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
 
@@ -66,6 +66,25 @@ export async function createGlobeView(env) {
   function tileInputs(i) {
     const mix = mixAt(i), q = (qCache[i] ??= NG.field(centre(i)));
     return { z: NG.z(z0At(i), mix, q), mix };
+  }
+
+  // A path's frame at any point p of the globe: as a tile's inputs, blended at p among the anchors round the cell
+  // nearest p, so frames morph smoothly between cells.
+  // ponytail: the nearest cell by brute force over all cells (~0.3 ms, at most 30 frames a second); a spatial index if it shows
+  function inputsAt(p) {
+    let i = 0, best = -2;
+    for (let k = 0; k < N; k++) { const d = g.centres[3 * k] * p[0] + g.centres[3 * k + 1] * p[1] + g.centres[3 * k + 2] * p[2]; if (d > best) { best = d; i = k; } }
+    const mix = {}, z0 = new Float32Array(Z); let t = 0, s = 0;
+    for (const [a, w] of anchorWeights(g, i, p)) {
+      if (!w) continue;
+      const m = anchorMix(a), n = anchorZ(a);
+      for (const c in m) { mix[c] = (mix[c] || 0) + w * m[c]; t += w * m[c]; }
+      for (let k = 0; k < Z; k++) z0[k] += w * n[k];
+    }
+    for (const c in mix) { mix[c] /= t; if (mix[c] < 0.005) delete mix[c]; }
+    for (let k = 0; k < Z; k++) s += z0[k] * z0[k];
+    s = Math.sqrt(Z / s); for (let k = 0; k < Z; k++) z0[k] *= s;
+    return { z: NG.z(z0, mix, NG.field(p)), mix };
   }
 
   // ---- tile images: GPU texture arrays at 16, 64 and 256 px. Every tile made keeps a 16 px copy; 64 and 256 px keep
@@ -226,9 +245,18 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
   }
   const globeFling = flinger((dx, dy) => turn(dx / zoom, dy / zoom));
   const pointers = new Map(); let pinch = 0;
-  cv.addEventListener('pointerdown', (e) => { cv.setPointerCapture(e.pointerId); pointers.set(e.pointerId, [e.clientX, e.clientY]); cv.classList.add('drag'); globeFling.down(); });
+  // The page's path tool is offered each pointer first (env.pen: Draw mode, or a drag on the path's dot); one it
+  // takes draws or scrubs, and does not turn the globe. Positions for it are CSS px within the canvas.
+  let penId = null;
+  const at = (e) => { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+  cv.addEventListener('pointerdown', (e) => {
+    cv.setPointerCapture(e.pointerId);
+    if (!pointers.size && penId === null && env.pen.down(...at(e), e)) { penId = e.pointerId; return; }
+    pointers.set(e.pointerId, [e.clientX, e.clientY]); cv.classList.add('drag'); globeFling.down();
+  });
   cv.addEventListener('pointermove', (e) => {
-    const p = pointers.get(e.pointerId); if (!p) return;
+    if (e.pointerId === penId) { env.pen.move(...at(e), e); return; }
+    const p = pointers.get(e.pointerId); if (!p) { env.pen.hover(...at(e)); return; }
     if (pointers.size === 2) {
       const [a, b] = [...pointers.values()], d0 = Math.hypot(a[0] - b[0], a[1] - b[1]); pointers.set(e.pointerId, [e.clientX, e.clientY]);
       const [c, dd] = [...pointers.values()], d1 = Math.hypot(c[0] - dd[0], c[1] - dd[1]);
@@ -238,7 +266,10 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     const dx = e.clientX - p[0], dy = e.clientY - p[1];
     turn(dx / zoom, dy / zoom); globeFling.move(dx, dy); pointers.set(e.pointerId, [e.clientX, e.clientY]);
   });
-  const up = (e) => { pointers.delete(e.pointerId); if (!pointers.size) { cv.classList.remove('drag'); globeFling.up(); } };
+  const up = (e) => {
+    if (e.pointerId === penId) { penId = null; env.pen.up(e); return; }
+    pointers.delete(e.pointerId); if (!pointers.size) { cv.classList.remove('drag'); globeFling.up(); }
+  };
   cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
   // The wheel sets a goal; the frame glides the zoom there (time constant 0.1 s), so a notch is a short glide, not a jump.
   cv.addEventListener('wheel', (e) => { e.preventDefault(); zoomGoal = clamp(zoomGoal * Math.exp(-e.deltaY * (e.deltaMode ? 0.05 : 0.0015)), fitR() * 0.5, maxZoom()); }, { passive: false });
@@ -391,7 +422,7 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     for (let k = 0; k < 6; k++) { const lo = Math.PI * k / 6; line((t) => [Math.cos(t) * Math.cos(lo), Math.sin(t), Math.cos(t) * Math.sin(lo)]); }
     lctx.font = `600 ${13 * dpr}px system-ui, sans-serif`; lctx.textAlign = 'center'; lctx.textBaseline = 'middle';
     const pts = GF.points, cand = [], boxes = [], wr = wrap.getBoundingClientRect(); nLabels = 0;
-    for (const id of ['stats', 'minicap', 'gmini', 'rail', 'railtab']) {  // no label under the overlays
+    for (const id of ['stats', 'pathwin', 'minicap', 'gmini', 'rail', 'railtab']) {  // no label under the overlays
       const e = $(id); if (e.hidden || !e.offsetWidth) continue; const r = e.getBoundingClientRect();
       boxes.push([(r.left - wr.left) * dpr, (r.top - wr.top) * dpr, (r.right - wr.left) * dpr, (r.bottom - wr.top) * dpr]);
     }
@@ -412,6 +443,7 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
       lctx.fillStyle = 'rgba(33,37,41,0.78)'; lctx.beginPath(); lctx.roundRect(px - tw / 2, py - th / 2, tw, th, th / 2); lctx.fill();
       lctx.fillStyle = '#fff'; lctx.fillText(t, px, py + 0.5 * dpr);
     }
+    env.overlay(lctx, dpr);  // the page's path, over the labels
   }
 
   // ---- the noise globe (noiseglobe.js): this view is its host while it shows ----
@@ -446,6 +478,17 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
       GF = await globeFiles(code); model = code;
       mixCache = new Array(N); ancMix = new Map(); epoch++; clearTiles(); refined.clear(); rePv.clear();
     },
+    // for the page's path tool: the point of the globe under a canvas position (null: off the globe), where a point
+    // shows ([x, y] CSS px in the canvas, and its depth: > 0 facing the viewer), a frame's inputs there, the tile sizes
+    pick(px, py) {
+      const x = (px - wrap.clientWidth / 2) / zoom, y = -(py - wrap.clientHeight / 2) / zoom, r2 = x * x + y * y; if (r2 >= 1) return null;
+      const zc = Math.sqrt(1 - r2); return [Rm[0] * x + Rm[3] * y + Rm[6] * zc, Rm[1] * x + Rm[4] * y + Rm[7] * zc, Rm[2] * x + Rm[5] * y + Rm[8] * zc];
+    },
+    project: (p) => [wrap.clientWidth / 2 + (Rm[0] * p[0] + Rm[1] * p[1] + Rm[2] * p[2]) * zoom, wrap.clientHeight / 2 - (Rm[3] * p[0] + Rm[4] * p[1] + Rm[5] * p[2]) * zoom, Rm[6] * p[0] + Rm[7] * p[1] + Rm[8] * p[2]],
+    inputsAt,
+    tileAngle: 2 * meanRad,  // a tile's size on the unit sphere
+    tilePx: () => 2 * meanRad * zoom,
+    get epoch() { return epoch; },
     zoomBy(f) { zoomGoal = clamp(zoomGoal * f, fitR() * 0.5, maxZoom()); },
     zoomPct: () => 100 * tilePx() / S100,
     zoomReset() { zoomGoal = clamp(S100 / (2 * meanRad), fitR() * 0.5, maxZoom()); },
