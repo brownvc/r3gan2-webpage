@@ -33,16 +33,27 @@ with sync_playwright() as p:
     check(v0 is not None and v0 == v1, f'turning the class globe leaves the noise globe still: {v0} -> {v1}')
     check(nc is not None and max(abs(a - b) for a, b in zip(f1, nc)) < 1e-3, f'the noise globe faces the noise at the view centre: {f1} vs {nc}')
     txt = pg.inner_text('#stats'); check('noise directions carry' in txt and '%' in txt, f'readout: {txt!r}')
-    # the noise minimap: spinning it moves p, starts a new epoch, and the tiles in view are made again
+    # the noise minimap: spinning it turns the noise of the class it names only; the tiles holding that class are made again
     s0 = pg.evaluate(G); mb = pg.locator('#mini').bounding_box(); mx, my = mb['x'] + mb['width'] / 2, mb['y'] + mb['height'] / 2
-    pg.mouse.move(mx, my); pg.mouse.down()
-    for k in range(10): pg.mouse.move(mx + 6 * k, my - 3 * k)
-    pg.wait_for_timeout(150)  # a pause before the release: a spin, not a flick
-    pg.mouse.up()
-    s1 = pg.evaluate(G); check(s1['p'] != s0['p'] and s1['epoch'] > s0['epoch'], f"noise point moved {s0['p']} -> {s1['p']}")
+    def spin(dx=6, dy=-3):
+        pg.mouse.move(mx, my); pg.mouse.down()
+        for k in range(10): pg.mouse.move(mx + dx * k, my + dy * k)
+        pg.wait_for_timeout(150)  # a pause before the release: a spin, not a flick
+        pg.mouse.up()
+    spin()
+    s1 = pg.evaluate(G); spun = list(s1['spun'])
+    check(len(spun) >= 1 and s1['Mm'] == s0['Mm'] and s1['epoch'] == s0['epoch'], f"a spin turns the noise of the named class only: {spun}; all-classes rotation and epoch unchanged")
+    check(0 < s1['stale'] < s1['madeCells'], f"a spin remakes only the tiles holding that class: {s1['stale']} of {s1['madeCells']} made")
+    check(s1['noiseCentre'] != s0['noiseCentre'], 'the view centre gets new noise')
     check(s1['miniView'] != s0['miniView'], 'spinning the noise globe turns it')
+    check('Shift' in pg.inner_text('#minicap'), f"the caption says what Shift does: {pg.inner_text('#minicap')!r}")
     pg.wait_for_timeout(8000); s2 = pg.evaluate(G)
     check(s2['made'] > s1['made'] and s2['epoch'] == s1['epoch'], f"after the spin, {s2['made'] - s1['made']} tiles made for the last point only")
+    # Shift: every class's noise turns, and every tile is made again
+    pg.keyboard.down('Shift'); spin(-5, 4); pg.keyboard.up('Shift'); s3 = pg.evaluate(G)
+    check(s3['Mm'] != s2['Mm'] and s3['epoch'] > s2['epoch'] and s3['spun'].keys() == s2['spun'].keys() and all(s3['spun'][k] != s2['spun'][k] for k in spun),
+          'a Shift-spin turns every class’s noise, the spun classes’ too')
+    pg.wait_for_timeout(8000); s2 = pg.evaluate(G)
     pg.wait_for_timeout(800)
     pg.wait_for_function(f'{G}.mini >= 5', timeout=60000); check(pg.evaluate(f'{G}.mini') >= 5, f"minimap tiles made once the view is done: {pg.evaluate(f'{G}.mini')}")
     # the minimap's tiles wrap its sphere as the main globe's do: once all are made, little of the bare sphere shows
@@ -60,6 +71,8 @@ with sync_playwright() as p:
     pg2.wait_for_function(f'{G} && {G}.drawn >= 50', timeout=180000)
     check(max(abs(a - b) for a, b in zip(pg2.evaluate(f'{G}.p'), s2['p'])) < 1e-3, 'a reload of the link restores p')
     m2 = pg.evaluate(f'{G}.Mm'); check(m2 is not None and max(abs(a - b) for a, b in zip(pg2.evaluate(f'{G}.Mm') or [9] * 9, m2)) < 1e-3, 'a reload restores the whole minimap rotation (every tile’s noise)')
+    sp1, sp2 = s2['spun'], pg2.evaluate(f'{G}.spun') or {}
+    check(sp1.keys() == sp2.keys() and all(max(abs(a - b) for a, b in zip(sp1[k], sp2[k])) < 1e-3 for k in sp1), f'a reload restores each spun class’s noise: {list(sp2)}')
     pg2.close()
     # psi = 0: every tile is its class centre, z = 0
     pg.goto(URL + '&psi=0', wait_until='load'); pg.wait_for_function(f'{G} && {G}.drawn >= 50', timeout=180000)

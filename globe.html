@@ -43,6 +43,7 @@
     cursor: grab; touch-action: none; }
   #minicap { position: absolute; left: 12px; bottom: calc(var(--mini) + 18px); max-width: calc(var(--mini) + 120px); padding: 1px 8px;
     border-radius: 4px; font-size: 12.5px; color: rgba(255, 255, 255, 0.85); background: rgba(33, 37, 41, 0.82); }
+  #minicap .shift { font-size: 11.5px; color: rgba(255, 255, 255, 0.6); }
   /* the noise globe's size button, at its top right */
   #minisize { position: absolute; left: calc(var(--mini) - 14px); bottom: calc(var(--mini) - 14px); width: 28px; height: 28px; padding: 0;
     display: grid; place-items: center; border: 0; border-radius: 50%; cursor: pointer; color: #fff; background: rgba(33, 37, 41, 0.82); }
@@ -120,8 +121,8 @@
   <canvas id="globe"></canvas>
   <canvas id="labels"></canvas>
   <div id="stats"></div>
-  <div id="minicap">Noise: spin to change</div>
-  <canvas id="mini" title="The noise globe: spin it to move every class along its own strongest noise directions" aria-label="Noise globe"></canvas>
+  <div id="minicap"><span id="minicapt">Noise: spin to change</span><br><span class="shift">Shift: all classes (careful!)</span></div>
+  <canvas id="mini" title="The noise globe: spin it to move the named class along its strongest noise directions; Shift-spin moves every class" aria-label="Noise globe"></canvas>
   <button id="minisize" title="Larger noise globe" aria-label="Larger noise globe" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path class="grow" d="M9.5 2.5h4v4M13.5 2.5 9 7M6.5 13.5h-4v-4M2.5 13.5 7 9"/><path class="shrink" d="M13 7H9V3M9 7l4.5-4.5M3 9h4v4M7 9l-4.5 4.5"/></svg></button>
   <div id="status" role="status">Starting WebGPU…</div>
   <button class="railtab" id="railtab" hidden title="Show the panel (H)" aria-controls="rail"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Settings</button>
@@ -137,7 +138,7 @@
       <table class="ctl" aria-label="View controls">
         <tr><th>Turn</th><td>Drag, or the arrow keys</td></tr>
         <tr><th>Zoom</th><td>Scroll or pinch</td></tr>
-        <tr><th>Noise</th><td>Spin the small globe</td></tr>
+        <tr><th>Noise</th><td>Spin the small globe: the class it names; with Shift, every class</td></tr>
         <tr><th>Pause</th><td>P</td></tr>
       </table>
       <p class="note" id="cfgnote"></p>
@@ -294,13 +295,19 @@ async function main() {
     s = Math.sqrt(Z / s); for (let k = 0; k < Z; k++) z[k] *= s;
     return z;
   }
-  // Each tile's noise point: the smooth random field at its place on the globe, turned by the noise minimap's
-  // rotation, so spinning the minimap moves every tile's noise along its class's 3 strongest directions together.
+  // Each tile's noise point: the smooth random field at its place on the globe, turned by its class's rotation: Mc for
+  // a class whose noise was spun on its own, else Mm (every class's). A tile blending classes blends their turned
+  // points by its class weights, so a spin reaches into the next class only through the border tiles.
   let NF = noiseField(noiseSeed), qCache = new Array(N);
+  const Mc = new Map();
+  function noiseOf(mix, q) {
+    const n = [0, 0, 0];
+    for (const c in mix) { const M = Mc.get(+c) ?? Mm, w = mix[c]; for (let t = 0; t < 3; t++) n[t] += w * (M[t] * q[0] + M[3 + t] * q[1] + M[6 + t] * q[2]); }
+    return unit(n);
+  }
   function tileInputs(i) {
     const mix = mixAt(i), q = (qCache[i] ??= noisePoint(NF, centre(i)));
-    const qq = [0, 1, 2].map((t) => Mm[t] * q[0] + Mm[3 + t] * q[1] + Mm[6 + t] * q[2]);  // Mm^T q
-    return { z: tileZ(dirsFor(mix).V, qq, psi, z0At(i)), mix };
+    return { z: tileZ(dirsFor(mix).V, noiseOf(mix, q), psi, z0At(i)), mix };
   }
 
   // ---- tile images: GPU texture arrays at 16, 64 and 256 px. Every tile made keeps a 16 px copy; 64 and 256 px keep
@@ -325,6 +332,7 @@ async function main() {
     dev.queue.copyExternalImageToTexture({ source: bmp }, { texture: T.tex, origin: [(r % T.per) * T.px, Math.floor(r / T.per) * T.px, Math.floor(s / p2)] }, [T.px, T.px]);
   }
   const made = new Int32Array(N).fill(-1);  // the epoch each cell's images were made for (-1: none)
+  const ver = new Int32Array(N);  // bumped when one cell's inputs change (its class's noise spun) without a new epoch
   let epoch = 0;
   function clearTiles() { for (const T of TIERS) { T.slot.clear(); T.owner.fill(-1); T.next = 0; } made.fill(-1); }
   async function store(cell, img) {
@@ -501,10 +509,11 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
       if (pv ? inflightP >= pvSlots : inflight >= G.slots) { k++; continue; }
       want.splice(k, 1); pending.add(cell); if (pv) inflightP++; else inflight++;
       if (!pv && made[cell] === epoch) remadeN++;  // a sharper copy of a cell already made (its larger one was evicted)
-      const ep = epoch, { z, mix } = tileInputs(cell), c = Float32Array.from(G.classVec(mix)), keep = pvSlots ? cell : undefined;
+      // keep: the id the lab keeps this cell's preview latent under; it carries ver, so a stale latent is never decoded
+      const ep = epoch, v = ver[cell], { z, mix } = tileInputs(cell), c = Float32Array.from(G.classVec(mix)), keep = pvSlots ? cell + N * v : undefined;
       (pv ? G.preview(z, c, NOISE, keep) : G.generate(z, c, NOISE, undefined, keep))
         .then((r) => {
-          fails = 0; if (ep !== epoch) return null;
+          fails = 0; if (ep !== epoch || v !== ver[cell]) return null;
           if (pv) { previewsN++; return made[cell] === ep ? null : storePreview(cell, r.fit); }
           return store(cell, r).then(() => { made[cell] = ep; madeN++; });
         })
@@ -513,6 +522,16 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     }
   }
   function remake() { epoch++; want = []; G.dropLatents(); }  // new inputs: every tile is made again; old images show until replaced
+  let stale = 0, madeCells = 0;  // the last spin: cells holding its classes, of all cells with inputs so far
+  function remakeClasses(cs) {  // these classes' noise turned: only the cells holding them are made again
+    stale = 0; madeCells = 0;
+    for (let i = 0; i < N; i++) {
+      const m = mixCache[i]; if (!m) continue; madeCells++;
+      if (!cs.some((c) => c in m)) continue;
+      ver[i]++; made[i] = -1; stale++;
+    }
+    want = [];
+  }
 
   // ---- the frame ----
   const inst = new Uint32Array(MAXI * 4), CAPS = TIERS.map((T, t) => (t ? T.cap : Infinity)); let drawn = 0, inView = 0, lastInView = 0, centreCell = -1;
@@ -567,7 +586,7 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     pump();
     drawLabels(S);
     showStats();
-    window.__globe = { drawn, inView, made: madeN, model: G.model, rot: Rm.slice(), zoom, p: P.slice(), epoch, psi, mini: miniImg.filter(Boolean).length, miniN: mg.n, labels: nLabels, previews: previewsN, remade: remadeN, morph: morphT, gridded, gridAngle: gst.e1 ? (Math.atan2(gst.e1[1], gst.e1[0]) * 180) / Math.PI : 0, Mm: Mm.slice(), miniView: Vm.slice(), miniFront: Dm.slice(6, 9), noiseCentre: noiseCentre() };
+    window.__globe = { drawn, inView, made: madeN, model: G.model, rot: Rm.slice(), zoom, p: P.slice(), epoch, psi, mini: miniImg.filter(Boolean).length, miniN: mg.n, labels: nLabels, previews: previewsN, remade: remadeN, morph: morphT, gridded, gridAngle: gst.e1 ? (Math.atan2(gst.e1[1], gst.e1[0]) * 180) / Math.PI : 0, Mm: Mm.slice(), spun: Object.fromEntries(Mc), stale, madeCells, miniView: Vm.slice(), miniFront: Dm.slice(6, 9), noiseCentre: noiseCentre() };
     requestAnimationFrame(frame);
   }
 
@@ -643,6 +662,7 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     q.set('m', G.model); q.set('n', noiseSeed); q.set('ns', noiseStr); q.set('soft', soft);
     if (psi !== 1) q.set('psi', psi); else q.delete('psi');
     q.set('rot', Rm.map(r).join(',')); q.set('zoom', Math.round(zoom)); q.set('p', P.map(r).join(',')); q.set('nm', Mm.map(r).join(','));
+    if (Mc.size) q.set('nc', [...Mc].map(([c, M]) => `${c}:${M.map(r).join(',')}`).join(';')); else q.delete('nc');
     q.set('h16', G.options.half ? 1 : 0); q.set('g16', G.options.gHalf ? 1 : 0);
     history.replaceState(null, '', `${location.pathname}?${q}`);
   }
@@ -693,7 +713,14 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
   // ring: the point drawn at s holds the noise Dm^T s. Turning the class globe changes what the minimap's tiles hold,
   // not where it points.
   let Dm = [1, 0, 0, 0, 1, 0, 0, 0, 1], Vm = [1, 0, 0, 0, 1, 0, 0, 0, 1];
-  const noiseCentre = () => { const q = noisePoint(NF, Rm.slice(6, 9)); return unit([0, 1, 2].map((t) => Mm[t] * q[0] + Mm[3 + t] * q[1] + Mm[6 + t] * q[2])); };
+  const noiseCentre = () => noiseOf(centreCell >= 0 ? mixAt(centreCell) : {}, noisePoint(NF, Rm.slice(6, 9)));
+  // the classes the caption names, whose noise a spin turns: the strongest at the view centre, and the next if >= 0.3
+  const named = (mix) => { const top = Object.keys(mix).sort((a, b) => mix[b] - mix[a]).map(Number); return top.length > 1 && mix[top[1]] >= 0.3 ? top.slice(0, 2) : top.slice(0, 1); };
+  // the link carries each spun class's rotation (nc=class:9 numbers;...), after the all-classes one (nm)
+  for (const part of (Q.get('nc') || '').split(';')) {
+    const [c, m] = part.split(':'), M = (m || '').split(',').map(Number);
+    if (Number.isInteger(+c) && +c >= 0 && +c < G.names.length && M.length === 9 && M.every(Number.isFinite)) Mc.set(+c, ortho(M));
+  }
   function faceMini() {  // the smallest turn of Dm that brings noiseCentre() to the front
     const n = noiseCentre(), v = [0, 1, 2].map((a) => Dm[3 * a] * n[0] + Dm[3 * a + 1] * n[1] + Dm[3 * a + 2] * n[2]);
     if (v[2] > 1 - 1e-9) return;
@@ -701,17 +728,21 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     const k = [v[1], -v[0], 0], K = [0, -k[2], k[1], k[2], 0, -k[0], -k[1], k[0], 0], K2 = mul(K, K), f = 1 / (1 + v[2]);
     Dm = ortho(mul([0, 1, 2, 3, 4, 5, 6, 7, 8].map((j) => (j % 4 === 0) + K[j] + K2[j] * f), Dm));
   }
+  let mAll = false;  // this drag (and its flick) turns every class's noise: Shift was held at its start
   function spinMini(dx, dy) {  // a drag (or flick) of dx, dy CSS px on the minimap
     const r = mini.clientWidth / 2, ax = dx / r, ay = dy / r;
     const cy = Math.cos(ax), sy = Math.sin(ax), cx = Math.cos(ay), sx = Math.sin(ay);
     const R = mul([1, 0, 0, 0, cx, -sx, 0, sx, cx], [cy, 0, sy, 0, 1, 0, -sy, 0, cy]);
-    // the drawn globe turns by R; the view centre's noise becomes the point now at the front: Mm <- Mm Dm^T R Dm
-    Mm = ortho(mul(Mm, mul(tr(Dm), mul(R, Dm)))); Dm = ortho(mul(R, Dm)); Vm = ortho(mul(R, Vm));
-    P = Mm.slice(6, 9); remake();
+    // the drawn globe turns by R; the view centre's noise becomes the point now at the front: M <- M Dm^T R Dm, for the
+    // named classes (each from its own rotation, or Mm's), or with Shift for every class
+    const X = mul(tr(Dm), mul(R, Dm));
+    if (mAll) { Mm = ortho(mul(Mm, X)); for (const [c, M] of Mc) Mc.set(c, ortho(mul(M, X))); P = Mm.slice(6, 9); remake(); }
+    else if (centreCell >= 0) { const cs = named(mixAt(centreCell)); for (const c of cs) Mc.set(c, ortho(mul(Mc.get(c) ?? Mm, X))); remakeClasses(cs); }
+    Dm = ortho(mul(R, Dm)); Vm = ortho(mul(R, Vm));
   }
   const miniFling = flinger(spinMini);
   let mdrag = null;
-  mini.addEventListener('pointerdown', (e) => { mini.setPointerCapture(e.pointerId); mdrag = [e.clientX, e.clientY]; miniFling.down(); });
+  mini.addEventListener('pointerdown', (e) => { mini.setPointerCapture(e.pointerId); mdrag = [e.clientX, e.clientY]; mAll = e.shiftKey; miniFling.down(); });
   mini.addEventListener('pointermove', (e) => {
     if (!mdrag) return;
     const dx = e.clientX - mdrag[0], dy = e.clientY - mdrag[1]; mdrag = [e.clientX, e.clientY];
@@ -792,7 +823,7 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     if (mk !== miniMix) {
       miniMix = mk; miniMixSince = performance.now();
       const top = Object.keys(mix).sort((a, b) => mix[b] - mix[a]), two = top.length > 1 && mix[top[1]] >= 0.3;
-      $('minicap').textContent = `Noise for ${G.names[top[0]]}${two ? ` and ${G.names[top[1]]}` : ''}: spin to change`;
+      $('minicapt').textContent = `Noise for ${G.names[top[0]]}${two ? ` and ${G.names[top[1]]}` : ''}: spin to change`;
     }
     const idle = !inflight && !inflightP && !want.length, front = (k) => Vm[6] * mg.centres[3 * k] + Vm[7] * mg.centres[3 * k + 1] + Vm[8] * mg.centres[3 * k + 2];
     let i = -1, best = -2, dec = false;
