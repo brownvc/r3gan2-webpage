@@ -117,6 +117,12 @@ with sync_playwright() as p:
         pg.wait_for_timeout(2500); return a != b
     check(flick('#globe', 'rot'), 'a flick keeps the class globe turning')
     check(flick('#mini', 'miniView'), 'a flick keeps the noise globe turning')
+    # a wheel notch glides to its zoom (about the centre: the globe does not turn) instead of jumping
+    bb = pg.locator('#globe').bounding_box(); pg.mouse.move(bb['x'] + 0.3 * bb['width'], bb['y'] + 0.3 * bb['height'])
+    z0, r0 = pg.evaluate(f'[{G}.zoom, {G}.rot]'); pg.mouse.wheel(0, -100); pg.wait_for_timeout(40); za = pg.evaluate(f'{G}.zoom')
+    pg.wait_for_timeout(1000); zb, rb = pg.evaluate(f'[{G}.zoom, {G}.rot]'); pg.wait_for_timeout(300); zc = pg.evaluate(f'{G}.zoom')
+    fa = math.log(za / z0) / math.log(zb / z0)
+    check(zb > 1.1 * z0 and fa < 0.8 and abs(zc / zb - 1) < 1e-3 and rb == r0, f'a wheel notch glides to its zoom about the centre: x{zb / z0:.2f}, {fa:.0%} of the way after 40 ms, settled after 1 s')
     # the noise globe's size button: larger, then back
     w0 = pg.evaluate("document.getElementById('mini').clientWidth"); pg.click('#minisize'); pg.wait_for_timeout(300)
     w1, cw = pg.evaluate("document.getElementById('mini').clientWidth"), pg.evaluate("document.getElementById('mini').width")

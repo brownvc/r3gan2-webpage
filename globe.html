@@ -432,7 +432,7 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
   if (Q.has('rot')) { const r = Q.get('rot').split(',').map(Number); if (r.length === 9 && r.every(Number.isFinite)) Rm = r; }
   const fitR = () => 0.42 * Math.min(wrap.clientWidth, wrap.clientHeight);
   const meanRad = rad.reduce((s, x) => s + x, 0) / N;
-  let zoom = +Q.get('zoom') > 0 ? +Q.get('zoom') : (innerWidth < 600 ? 56 : 84) / (2 * meanRad);
+  let zoom = +Q.get('zoom') > 0 ? +Q.get('zoom') : (innerWidth < 600 ? 56 : 84) / (2 * meanRad), zoomGoal = zoom, lastFrame = performance.now();
   const maxZoom = () => 300 / (2 * meanRad);  // a tile ~300 CSS px across
   const mul = (A, B) => [0, 1, 2].flatMap((i) => [0, 1, 2].map((j) => A[3 * i] * B[j] + A[3 * i + 1] * B[3 + j] + A[3 * i + 2] * B[6 + j]));
   function turn(ax, ay) {  // rotate the globe: ax about the screen's vertical axis, ay about its horizontal axis
@@ -465,7 +465,7 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     if (pointers.size === 2) {
       const [a, b] = [...pointers.values()], d0 = Math.hypot(a[0] - b[0], a[1] - b[1]); pointers.set(e.pointerId, [e.clientX, e.clientY]);
       const [c, dd] = [...pointers.values()], d1 = Math.hypot(c[0] - dd[0], c[1] - dd[1]);
-      if (d0 > 0) zoom = clamp(zoom * d1 / d0, fitR() * 0.5, maxZoom());
+      if (d0 > 0) zoom = zoomGoal = clamp(zoom * d1 / d0, fitR() * 0.5, maxZoom());
       globeFling.down(); return;  // a pinch does not fling
     }
     const dx = e.clientX - p[0], dy = e.clientY - p[1];
@@ -473,7 +473,8 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
   });
   const up = (e) => { pointers.delete(e.pointerId); if (!pointers.size) { cv.classList.remove('drag'); globeFling.up(); } };
   cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
-  cv.addEventListener('wheel', (e) => { e.preventDefault(); zoom = clamp(zoom * Math.exp(-e.deltaY * 0.0015), fitR() * 0.5, maxZoom()); }, { passive: false });
+  // The wheel sets a goal; the frame glides the zoom there (time constant 0.1 s), so a notch is a short glide, not a jump.
+  cv.addEventListener('wheel', (e) => { e.preventDefault(); zoomGoal = clamp(zoomGoal * Math.exp(-e.deltaY * (e.deltaMode ? 0.05 : 0.0015)), fitR() * 0.5, maxZoom()); }, { passive: false });
   addEventListener('keydown', (e) => {
     if (e.target.closest && e.target.closest('input, select, textarea')) return;
     const a = 0.3 * fitR() / zoom;
@@ -521,6 +522,8 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
   const smooth = (x) => { const t = clamp(x, 0, 1); return t * t * (3 - 2 * t); };
   function frame() {
     globeFling.step();
+    const now = performance.now(), kz = 1 - Math.exp(-(now - lastFrame) / 100); lastFrame = now;
+    zoom = Math.abs(zoomGoal / zoom - 1) < 1e-4 ? zoomGoal : zoom * (zoomGoal / zoom) ** kz;
     const S = zoom * dpr, sx = 2 * S / W, sy = 2 * S / H;
     morphT = smooth((2 * meanRad * zoom - 110) / 90);
     const vis = morphT > 0 ? [] : null, vpos = morphT > 0 ? new Map() : null;
