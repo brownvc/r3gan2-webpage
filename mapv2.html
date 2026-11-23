@@ -324,7 +324,7 @@
 <script type="module">
 import { createLab, MODELS, weightsFile, fileExists, savedInBrowser, gauss, hash2, rng, Z, fmt, DATA, SMALL_DEVICE } from './lab.js?v=20261122c';
 import { Path, Playhead } from './path.js?v=20261120b';
-import { createGlobeView } from './globeview.js?v=20261123a';
+import { createGlobeView } from './globeview.js?v=20261123b';
 import { createNoiseGlobe } from './noiseglobe.js?v=20261123a';
 const $ = (id) => document.getElementById(id);
 
@@ -999,12 +999,13 @@ async function main() {
     get noiseSeed() { return noiseSeed; }, get noiseStr() { return noiseStr; }, get NOISE() { return NOISE; },
     get held() { return held; }, get paused() { return paused || switching; },
     get latRaw() { return latRaw; }, get convOnly() { return convOnly; }, get arrows() { return arrows; }, cheapMove: CHEAP_MOVE,
+    get pathSlow() { return animating && pathSlow; },
   };
   const noRoomMsg = 'Zoomed in, tiles stay with TAEF2: the full decoder needs about 0.75 GB of GPU memory that does not seem free here.';
   const globeEnv = () => ({
     G, Q, $, GD, S100, blocked, sh, NG, fail: failed, ok: () => { fails = 0; }, pen: gpen, overlay: drawGlobePath, spun: flatSpun,  // spun: the noise globe turned on the globe; the flat map's tiles are stale too
     // the full FLUX.2 decoder over TAEF2, as on the flat maps: only when it is on, fits, and the page is left alone
-    refineOK: () => !(G.lost || fullOff || !refineOn || convOnly || !avail.flux2 || G.options.decoder === 'flux2' || held || paused || switching) && performance.now() - lastInput >= IDLE_MS,
+    refineOK: () => !(G.lost || fullOff || !refineOn || convOnly || !avail.flux2 || G.options.decoder === 'flux2' || held || paused || switching || animating) && performance.now() - lastInput >= IDLE_MS,  // animating: the path's frames need the GPU
     refineReady: () => (fits ??= G.fullFits().then((ok) => { if (!ok) throw new Error(noRoomMsg); })).then(() => G.loadFull()),
     refineFailed: (e) => {
       fullOff = true;
@@ -1071,7 +1072,7 @@ async function main() {
     try { await change(); }
     catch (e) { $('cfgnote').textContent = `Couldn’t switch: ${e.message || e}`; status(''); }
     NOISE = makeNoise();
-    fails = 0; remake(keepFull); if (gv) gv.remake(); switching = false; paused = false; showLook(); markSaved(); animate();  // the path animation resumes too
+    fails = 0; remake(keepFull); if (gv) gv.remake(keepFull); switching = false; paused = false; showLook(); markSaved(); animate();  // the path animation resumes too
   }
   // keepFull: tiles already at full quality (FLUX.2) stay as they are; only the rest are made again.
   function remake(keepFull = false) {  // every decoded tile counts as not decoded yet (as a latent preview does), and stays drawn till then
@@ -1966,41 +1967,45 @@ async function main() {
   // a loop; when an endless path nears its cap, its oldest tenth fades in. Then the dot, or an arrow at the edge
   // pointing to it when it is off screen.
   let accent = '';
-  function drawPath(sd) {
+  const scrOut = [0, 0, true];
+  // scr(p, o): where path point p shows on the canvas, written into o: [x, y, in front]. limb: the globe's radius on
+  // the canvas (0 on the flat maps), for the arrow to a dot round the back.
+  function drawPathOn(g2, k, W2, H2, scr, limb) {
     const P = path.points, n = P.length;
     if (n < 2 && !pathDot) return;
     accent ||= getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#C00404';
-    const X = (p) => (p.x - view.x) * sd + W / 2, Y = (p) => (p.y - view.y) * sd + H / 2;
-    const fadeN = n > 0.8 * path.maxPoints ? Math.floor(0.1 * path.maxPoints) : 0, L = path.loop;
+    const fadeN = n > 0.8 * path.maxPoints ? Math.floor(0.1 * path.maxPoints) : 0, L = path.loop, o = scrOut;
     // a segment's style as one number (no allocation per point per frame): bridge | in loop << 1 | fade (0-8) << 2
-    const style = (k) => (P[k].bridge ? 1 : 0) | (L && path.base + k >= L.a && path.base + k <= L.b ? 2 : 0) | ((k < fadeN ? Math.min(7, Math.floor(8 * k / fadeN)) : 8) << 2);
-    ctx.save(); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-    for (let k = 1, a = 0; k < n; k++) {  // segment k joins points k-1 and k; consecutive segments of one style, one stroke
-      const s = style(k); if (k + 1 < n && style(k + 1) === s) continue;
-      const bridge = s & 1, inLoop = s & 2, fade = s >> 2, wid = (inLoop ? 4.5 : 3) * dpr;
-      ctx.globalAlpha = fade / 8; ctx.setLineDash(bridge ? [6 * dpr, 6 * dpr] : []);
-      ctx.beginPath(); ctx.moveTo(X(P[a]), Y(P[a]));
-      for (let q = a + 1; q <= k; q++) ctx.lineTo(X(P[q]), Y(P[q]));
-      ctx.strokeStyle = 'rgba(20,20,20,0.85)'; ctx.lineWidth = wid + 3 * dpr; ctx.stroke();
-      ctx.strokeStyle = '#ffffff'; ctx.lineWidth = wid; ctx.stroke();
-      a = k;
+    const style = (q) => (P[q].bridge ? 1 : 0) | (L && path.base + q >= L.a && path.base + q <= L.b ? 2 : 0) | ((q < fadeN ? Math.min(7, Math.floor(8 * q / fadeN)) : 8) << 2);
+    g2.save(); g2.lineCap = 'round'; g2.lineJoin = 'round';
+    for (let q = 1, a = 0; q < n; q++) {  // segment q joins points q-1 and q; consecutive segments of one style, one stroke
+      const s = style(q); if (q + 1 < n && style(q + 1) === s) continue;
+      const bridge = s & 1, inLoop = s & 2, fade = s >> 2, wid = (inLoop ? 4.5 : 3) * k;
+      g2.globalAlpha = fade / 8; g2.setLineDash(bridge ? [6 * k, 6 * k] : []);
+      g2.beginPath(); let on = false;  // broken where the path goes round the back of the globe
+      for (let t = a; t <= q; t++) { scr(P[t], o); if (!o[2]) { on = false; continue; } if (on) g2.lineTo(o[0], o[1]); else g2.moveTo(o[0], o[1]); on = true; }
+      g2.strokeStyle = 'rgba(20,20,20,0.85)'; g2.lineWidth = wid + 3 * k; g2.stroke();
+      g2.strokeStyle = '#ffffff'; g2.lineWidth = wid; g2.stroke();
+      a = q;
     }
-    ctx.globalAlpha = 1; ctx.setLineDash([]);
+    g2.globalAlpha = 1; g2.setLineDash([]);
     const D = dotAt(performance.now());
     if (D) {
-      const x = X(D), y = Y(D), m = 14 * dpr;
-      if (x >= 0 && x <= W && y >= 0 && y <= H) {
-        ctx.beginPath(); ctx.arc(x, y, DOT_R * dpr, 0, 2 * Math.PI); ctx.fillStyle = accent; ctx.fill();
-        ctx.lineWidth = 3 * dpr; ctx.strokeStyle = '#ffffff'; ctx.stroke();
-      } else {  // off screen: an arrow on the edge, pointing at it
-        const ex = clamp(x, m, W - m), ey = clamp(y, m, H - m), ang = Math.atan2(y - H / 2, x - W / 2), r = 9 * dpr;
-        ctx.translate(ex, ey); ctx.rotate(ang);
-        ctx.beginPath(); ctx.moveTo(r, 0); ctx.lineTo(-r * 0.7, r * 0.75); ctx.lineTo(-r * 0.7, -r * 0.75); ctx.closePath();
-        ctx.fillStyle = accent; ctx.fill(); ctx.lineWidth = 1.5 * dpr; ctx.strokeStyle = '#ffffff'; ctx.stroke();
+      scr(D, o); let x = o[0], y = o[1]; const m = 14 * k;
+      if (o[2] && x >= 0 && x <= W2 && y >= 0 && y <= H2) {
+        g2.beginPath(); g2.arc(x, y, DOT_R * k, 0, 2 * Math.PI); g2.fillStyle = accent; g2.fill();
+        g2.lineWidth = 3 * k; g2.strokeStyle = '#ffffff'; g2.stroke();
+      } else {  // off screen, or round the back of the globe: an arrow on the edge (or the globe's rim), pointing at it
+        const ang = Math.atan2(y - H2 / 2, x - W2 / 2), r = 9 * k;
+        if (!o[2]) { x = W2 / 2 + limb * Math.cos(ang); y = H2 / 2 + limb * Math.sin(ang); }
+        g2.translate(clamp(x, m, W2 - m), clamp(y, m, H2 - m)); g2.rotate(ang);
+        g2.beginPath(); g2.moveTo(r, 0); g2.lineTo(-r * 0.7, r * 0.75); g2.lineTo(-r * 0.7, -r * 0.75); g2.closePath();
+        g2.fillStyle = accent; g2.fill(); g2.lineWidth = 1.5 * k; g2.strokeStyle = '#ffffff'; g2.stroke();
       }
     }
-    ctx.restore();
+    g2.restore();
   }
+  function drawPath(sd) { drawPathOn(ctx, dpr, W, H, (p, o) => { o[0] = (p.x - view.x) * sd + W / 2; o[1] = (p.y - view.y) * sd + H / 2; o[2] = true; }, 0); }
 
   // ---- the dot: drag it along the path to scrub (any mode); it then plays on from where it is let go ----
   const DOT_R = 8;  // CSS px
@@ -2045,20 +2050,22 @@ async function main() {
       else if (pen && e.pointerId === pen.id) { if (pen.on) path.penUp(); pen = null; }
     },
     hover(px, py) { gcv.classList.toggle('ondot', !!onDot(px, py)); },
+    cancel() {  // a second finger: scrubbing or the stroke ends
+      if (scrub !== null) { scrub = null; gcv.classList.remove('scrub'); }
+      if (pen) { if (pen.on) path.penUp(); pen = null; }
+    },
+    zoomed: () => penZoomed(),  // the view zoomed under the pen: the stroke goes on as a new one at the new spacing
+    edge() {  // the pen is down near an edge: which way, and how far into the 40 px margin (-1 to 1 each way)
+      if (!pen || !pen.on) return null;
+      const M = 40, f = (v, n) => clamp(v < M ? -(M - v) / M : v > n - M ? (v - (n - M)) / M : 0, -1, 1), dx = f(pen.x, cssW), dy = f(pen.y, cssH);
+      return dx || dy ? [dx, dy] : null;
+    },
+    carry() { if (pen && pen.on) { const c = globeWorld(pen.x, pen.y); if (c) path.penMove(c.x, c.y); } },  // the globe moved under the pen
   };
   gcv.addEventListener('contextmenu', (e) => { if (drawMode) { e.preventDefault(); clearPath(); } });  // Draw mode stays on
-  // The path on the globe: the white line with a dark edge, broken where it goes round the back, then the dot.
+  // The path on the globe, as on the flat maps (drawPathOn): broken where it goes round the back.
   function drawGlobePath(g2, k) {
-    const P = path.points, n = P.length;
-    if (n < 2 && !pathDot) return;
-    accent ||= getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#C00404';
-    g2.save(); g2.lineCap = 'round'; g2.lineJoin = 'round';
-    g2.beginPath(); let on = false;  // one path, each point projected once, stroked twice
-    for (let q = 0; q < n; q++) { const v = pathScreen(P[q]); if (!v) { on = false; continue; } if (on) g2.lineTo(v[0] * k, v[1] * k); else g2.moveTo(v[0] * k, v[1] * k); on = true; }
-    for (const [col, wid] of [['rgba(20,20,20,0.85)', 6 * k], ['#ffffff', 3 * k]]) { g2.strokeStyle = col; g2.lineWidth = wid; g2.stroke(); }
-    const D = dotAt(performance.now()), v = D && pathScreen(D);
-    if (v) { g2.beginPath(); g2.arc(v[0] * k, v[1] * k, DOT_R * k, 0, 2 * Math.PI); g2.fillStyle = accent; g2.fill(); g2.lineWidth = 3 * k; g2.strokeStyle = '#ffffff'; g2.stroke(); }
-    g2.restore();
+    drawPathOn(g2, k, g2.canvas.width, g2.canvas.height, (p, o) => { const q = gv.project(fromChart(p)); o[0] = q[0] * k; o[1] = q[1] * k; o[2] = q[2] > 0; }, gv.radius() * k);
   }
 
   // ---- input: drag, fling, wheel and pinch zoom (positions relative to the canvas) ----

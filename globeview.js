@@ -249,15 +249,16 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
   const pointers = new Map(); let pinch = 0;
   // The page's path tool is offered each pointer first (env.pen: Draw mode, or a drag on the path's dot); one it
   // takes draws or scrubs, and does not turn the globe. Positions for it are CSS px within the canvas.
-  let penId = null;
+  let penId = null, penAt = [0, 0];
   const at = (e) => { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
   cv.addEventListener('pointerdown', (e) => {
     cv.setPointerCapture(e.pointerId);
-    if (!pointers.size && penId === null && env.pen.down(...at(e), e)) { penId = e.pointerId; return; }
+    if (penId !== null) { env.pen.cancel(); pointers.set(penId, penAt); penId = null; }  // a second finger: the stroke ends and the two pinch, as on the flat maps
+    else if (!pointers.size && env.pen.down(...at(e), e)) { penId = e.pointerId; penAt = [e.clientX, e.clientY]; return; }
     pointers.set(e.pointerId, [e.clientX, e.clientY]); cv.classList.add('drag'); globeFling.down();
   });
   cv.addEventListener('pointermove', (e) => {
-    if (e.pointerId === penId) { env.pen.move(...at(e), e); return; }
+    if (e.pointerId === penId) { penAt = [e.clientX, e.clientY]; env.pen.move(...at(e), e); return; }
     const p = pointers.get(e.pointerId); if (!p) { env.pen.hover(...at(e)); return; }
     if (pointers.size === 2) {
       const [a, b] = [...pointers.values()], d0 = Math.hypot(a[0] - b[0], a[1] - b[1]); pointers.set(e.pointerId, [e.clientX, e.clientY]);
@@ -274,7 +275,7 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
   };
   cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
   // The wheel sets a goal; the frame glides the zoom there (time constant 0.1 s), so a notch is a short glide, not a jump.
-  cv.addEventListener('wheel', (e) => { e.preventDefault(); zoomGoal = clamp(zoomGoal * Math.exp(-e.deltaY * (e.deltaMode ? 0.05 : 0.0015)), fitR() * 0.5, maxZoom()); }, { passive: false });
+  cv.addEventListener('wheel', (e) => { e.preventDefault(); env.pen.zoomed(); zoomGoal = clamp(zoomGoal * Math.exp(-e.deltaY * (e.deltaMode ? 0.05 : 0.0015)), fitR() * 0.5, maxZoom()); }, { passive: false });
 
   // ---- generation: the tiles in view that lack an image for this epoch (or a large enough one), nearest the centre
   // first, as many in flight as the lab has slots ----
@@ -305,13 +306,13 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     // GPU back quickly, so the motion stays smooth; the decodes wait until 200 ms after it stops.
     const cheap = sh.cheapMove && G.preview && performance.now() - movedAt < 200;
     G.smooth = !!cheap;  // and each latent's GPU work is spread over frames (the lab's smooth mode)
-    const pvSlots = G.preview ? G.previewSlots : 0;
-    for (let k = 0; k < want.length && (inflight < G.slots || inflightP < pvSlots);) {
+    const slow = sh.pathSlow, slots = slow ? 1 : G.slots, pvSlots = !G.preview ? 0 : slow ? 1 : G.previewSlots;  // a path animating short of 30 frames a second goes first
+    for (let k = 0; k < want.length && (inflight < slots || inflightP < pvSlots);) {
       const cell = want[k]; if (pending.has(cell)) { want.splice(k, 1); continue; }
       const pv = pvSlots > 0 && needPv(cell);
       if (!pv && sh.convOnly) { want.splice(k, 1); continue; }  // Conv alone: the latents are all there is
       if (!pv && cheap) { k++; continue; }  // the view is moving: decodes wait
-      if (pv ? inflightP >= pvSlots : inflight >= G.slots) { k++; continue; }
+      if (pv ? inflightP >= pvSlots : inflight >= slots) { k++; continue; }
       want.splice(k, 1); pending.add(cell); if (pv) inflightP++; else inflight++;
       if (!pv && made[cell] === epoch) remadeN++;  // a sharper copy of a cell already made (its larger one was evicted)
       // keep: the id the lab keeps this cell's preview latent under; it carries ver, so a stale latent is never decoded
@@ -326,7 +327,8 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
         .finally(() => { pending.delete(cell); if (pv) inflightP--; else inflight--; pump(); });
     }
   }
-  function remake() { epoch++; want = []; G.dropLatents(); refined.clear(); rePv.clear(); }  // new inputs: every tile is made again; old images show until replaced
+  // keepFull: the change does not alter the full FLUX.2 decoder's images, so the cells it made stay as they are
+  function remake(keepFull = false) { epoch++; want = []; G.dropLatents(); rePv.clear(); if (keepFull) for (const c of refined) made[c] = epoch; else refined.clear(); }  // new inputs: every tile is made again; old images show until replaced
   let stale = 0, madeCells = 0;  // the last spin: cells holding its classes, of all cells with inputs so far
   function remakeClasses(cs) {  // these classes' noise turned: only the cells holding them are made again
     stale = 0; madeCells = 0;
@@ -353,6 +355,9 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     if (inflight > 0) busy += dtf; if (inflightP > 0) busyP += dtf; if (inflight > 0 || inflightP > 0) busyAny += dtf;
     // arrow keys, held: the view moves 300 px a second, as on the flat maps (left: towards what is on the left)
     for (const k of sh.arrows) { const a = ARROWS[k], d = 300 * Math.min(0.1, dtf) / zoom; if (a) turn(-a[0] * d, -a[1] * d); }
+    // while the pen is down near an edge the globe turns that way (up to 600 px a second), and the stroke follows the pen
+    const ed = env.pen.edge(); if (ed) { const d = 600 * Math.min(0.1, dtf) / zoom; turn(-ed[0] * d, -ed[1] * d); }
+    if (ed || sh.arrows.size) env.pen.carry();
     zoom = Math.abs(zoomGoal / zoom - 1) < 1e-4 ? zoomGoal : zoom * (zoomGoal / zoom) ** kz;
     const S = zoom * dpr, sx = 2 * S / W, sy = 2 * S / H;
     morphT = smooth((2 * meanRad * zoom - 110) / 90);
@@ -513,6 +518,7 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     inputsAt,
     tileAngle: 2 * meanRad,  // a tile's size on the unit sphere
     tilePx: () => 2 * meanRad * zoom,
+    radius: () => zoom,  // the globe's radius, CSS px
     get epoch() { return epoch; },
     zoomBy(f) { zoomGoal = clamp(zoomGoal * f, fitR() * 0.5, maxZoom()); },
     zoomPct: () => 200 * meanRad * zoom / S100,

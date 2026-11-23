@@ -120,6 +120,7 @@ with sync_playwright() as p:
         pg.wait_for_timeout(150); pg.mouse.up()
     pg.wait_for_function(f'{V}.left === 0', timeout=180000); n0 = pg.evaluate(N); e3 = g()['epoch']; spin(); pg.wait_for_timeout(400); n1 = pg.evaluate(N); s = g()
     check(len(n1['spun']) >= 1 and n1['Mm'] == n0['Mm'] and s['epoch'] == e3 and 0 < s['stale'] < s['madeCells'], f"a spin turns the named class's noise only ({list(n1['spun'])}) and remakes its tiles only: {s['stale']} of {s['madeCells']}")
+    pg.wait_for_timeout(1300)  # the link follows within a second
     check(n1['view'] != n0['view'] and 'as every class' not in pg.inner_text('#ngcode') and 'nc=' in pg.url, f"the small globe turns, its code and the link follow: {pg.inner_text('#ngcode')!r}")
     pg.keyboard.down('Shift'); spin(-5, 4); pg.keyboard.up('Shift'); pg.wait_for_timeout(300); n2 = pg.evaluate(N)
     check(n2['Mm'] != n1['Mm'] and g()['epoch'] > e3, "a Shift-spin turns every class's noise")
