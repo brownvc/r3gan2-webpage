@@ -318,9 +318,9 @@
   });
 </script>
 <script type="module">
-import { createFastGAN } from './fastgan.js?v=20261122c';
+import { createFastGAN } from './fastgan.js?v=20261122d';
 import { DATA } from './config.js';
-import { cachedBytes as stored, gauss, savedInBrowser, gpuLostNotice, scoped, gpuLabel, SMALL_DEVICE } from './lab.js?v=20261122c';  // one copy of the storage code
+import { cachedBytes as stored, gauss, savedInBrowser, gpuLostNotice, scoped, gpuLabel, SMALL_DEVICE } from './lab.js?v=20261122d';  // one copy of the storage code
 const data = (f) => DATA + f;  // weights, embeddings, test vectors, decoder
 const log = (s) => { document.getElementById('log').textContent += s + '\n'; console.log(s); };
 let lastErr = ''; const logOnce = (s) => { if (s !== lastErr) { lastErr = s; log(s); } };  // for errors that recur every frame
@@ -360,7 +360,8 @@ async function main() {
     // everywhere.
     hasF16 = adapter.features.has('shader-f16') && !/Firefox\//.test(navigator.userAgent) && typeof Float16Array === 'function';  // Float16Array: Chrome 135+
     profile = Q.has('profile') && adapter.features.has('timestamp-query');
-    device = await adapter.requestDevice({ requiredFeatures: [...(profile ? ['timestamp-query'] : []), ...(hasF16 ? ['shader-f16'] : [])] });
+    // timestamp-query also lets createFastGAN time its grouped-conv tilings on the GPU (gconvTune)
+    device = await adapter.requestDevice({ requiredFeatures: [...(adapter.features.has('timestamp-query') ? ['timestamp-query'] : []), ...(hasF16 ? ['shader-f16'] : [])] });
     // A lost GPU (crash, driver reset): nothing more can run, so a notice with a Reload button. Errors: the first few
     // are logged and the first is shown (logging every frame's would freeze the page).
     device.lost.then((info) => gpuLostNotice(info.message || info.reason));
@@ -424,6 +425,8 @@ async function main() {
       const net = await scoped(device, Mdl.label, () => createFastGAN(device, Mdl.man, Mdl.wbin, { half, gHalf }), (n) => n.destroy());
       Mdl.nets[key] = { net, draw: net.attach($('cv')) };
       log(`${Mdl.label}: built ${net.ops.length} dispatches in ${(performance.now() - t0).toFixed(0)} ms`);
+      const t1 = performance.now();  // grouped-conv tilings: from localStorage at once, or timed in the background
+      net.tuned.then(() => net.tiling && log(`${Mdl.label}: grouped convs ${net.tiling} (after ${(performance.now() - t1).toFixed(0)} ms)`));
     }
     return Mdl.nets[key];
   }

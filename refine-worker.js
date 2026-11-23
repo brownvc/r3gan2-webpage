@@ -2,7 +2,7 @@
 // device. The decoder file is fetched and stored like the weights (lab.js), so storing and reading 199 MB never blocks
 // the page. Messages in: { load: { url } }, then { lat, sig }; out: { ready }, { img, sig } or { error }.
 import * as ort from 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.webgpu.min.mjs';
-import { cachedBytes } from './lab.js?v=20261122c';
+import { cachedBytes } from './lab.js?v=20261122d';
 
 ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/';
 let session = null;
