@@ -241,7 +241,7 @@
         <tr><th>Zoom</th><td class="c"><span class="zoom"><button class="k" id="zout" title="Zoom out (&minus; key)" aria-label="Zoom out">&minus;</button><button class="pct" id="zpct" title="Back to 100%">100%</button><button class="k" id="zin" title="Zoom in (+ key)" aria-label="Zoom in">+</button></span></td><td>Scroll or pinch</td></tr>
         <tr><th>Teleport</th><td class="c"><button class="k" id="teleport" title="Teleport (T key)">T</button></td><td>Jump somewhere new</td></tr>
         <tr><th>Pause</th><td class="c"><button class="k" id="pause" aria-pressed="false" title="Pause (P key)">P</button></td><td id="pausetxt">Stop or resume</td></tr>
-        <tr><th>Draw</th><td class="c"><button class="k" id="draw" aria-pressed="false" title="Draw a path (D key)">D</button></td><td id="drawtxt">Draw a path to animate; right-click clears</td></tr>
+        <tr><th>Draw</th><td class="c"><button class="k" id="draw" aria-pressed="false" title="Draw a path (D key)">D</button></td><td>Draw a path to animate; right-click clears</td></tr>
         <tr id="noiserow" hidden><th>Noise</th><td class="c"><span class="how">spin</span></td><td title="Spinning the noise globe changes the noise of the class it names; with Shift held, of every class">Spin the small globe; Shift: all classes</td></tr>
       </table>
       <p class="note" id="cfgnote"></p>
@@ -291,9 +291,7 @@
         </div>
         <h3>Noise</h3>
         <div class="checks"><label><input id="ngon" type="checkbox"> Noise globe</label></div>
-        <p class="help" id="nghelp">Steer each class’s noise by hand: a small globe sets the noise along the class’s 3 strongest directions. Spin it to change the class it names; with Shift, every class.</p>
         <p class="help" id="ngcode" hidden title="The noise of the class the noise globe names, as a rotation in degrees (axis times angle)"></p>
-        <p class="help">Each visit draws its own noise, so your map is yours alone; the link keeps it.</p>
         <div class="bar"><label for="nseed">Seed</label><input id="nseed" type="number" min="0" max="999999" step="1"><button class="plain" id="nprev" aria-label="Previous noise seed">&lsaquo;</button><button class="plain" id="nnext" aria-label="Next noise seed">&rsaquo;</button><button class="plain" id="newn">Random</button></div>
         <div class="slider">
           <div class="slabel"><label for="nstr">Strength</label><span class="val" id="nstrv"></span></div>
@@ -326,8 +324,8 @@
 <script type="module">
 import { createLab, MODELS, weightsFile, fileExists, savedInBrowser, gauss, hash2, rng, Z, fmt, DATA, SMALL_DEVICE } from './lab.js?v=20261122c';
 import { Path, Playhead } from './path.js?v=20261120b';
-import { createGlobeView } from './globeview.js?v=20261122d';
-import { createNoiseGlobe } from './noiseglobe.js?v=20261122b';
+import { createGlobeView } from './globeview.js?v=20261123a';
+import { createNoiseGlobe } from './noiseglobe.js?v=20261123a';
 const $ = (id) => document.getElementById(id);
 
 // Classes for the regions: visually distinct, and pleasant to blend between.
@@ -385,7 +383,7 @@ async function main() {
   // are taken by their neighbours.
   const BLOCKED = ['bikini', 'brassiere', 'maillot', 'maillot tank suit', 'miniskirt', 'swimming trunks', 'diaper'];
   const ATLAS = await fetch('class-square.json').then((r) => (r.ok ? r.json() : null)).catch(() => null);
-  if (!ATLAS) $('cfgnote').textContent = 'The 1,000-class layout didn’t load, so only Endless is available. A content blocker may be blocking class-square.json.';
+  if (!ATLAS) $('cfgnote').textContent = 'The 2D Hilbert layout didn’t load. A content blocker may be blocking class-square.json.';
   const blocked = new Set(BLOCKED.map((n) => G.names.indexOf(n)).filter((k) => k >= 0));
   const AG = ATLAS ? ATLAS.grid : 0;  // the square is AG x AG regions; a cell of -1 is empty
   const atlasCells = ATLAS ? ATLAS.cells.map((c) => (c >= 0 && !blocked.has(c) ? c : -1)) : [];
@@ -943,7 +941,7 @@ async function main() {
     $('trunc').value = psi; $('truncv').textContent = psi === 1 ? '1 (as trained)' : psi.toFixed(2);
     if (document.activeElement !== $('nseed')) $('nseed').value = noiseSeed;
     $('nstr').value = noiseStr; $('nstrv').textContent = noiseStr === 1 ? '1 (as trained)' : String(noiseStr);
-    if (NG) { $('ngon').checked = NG.on; $('ngon').disabled = switching || !gAvail[G.model]; $('nghelp').hidden = false; }
+    if (NG) { $('ngon').checked = NG.on; $('ngon').disabled = switching || !gAvail[G.model]; }  // NG: not on the first call
     for (const k of ['size', 'density', 'mode', 'fog']) q.delete(k);  // older parameters
     history.replaceState(null, '', `${location.pathname}?${q}`);
   }
@@ -1004,7 +1002,7 @@ async function main() {
   };
   const noRoomMsg = 'Zoomed in, tiles stay with TAEF2: the full decoder needs about 0.75 GB of GPU memory that does not seem free here.';
   const globeEnv = () => ({
-    G, Q, $, GD, S100, blocked, sh, NG, fail: failed, ok: () => { fails = 0; }, pen: gpen, overlay: drawGlobePath,
+    G, Q, $, GD, S100, blocked, sh, NG, fail: failed, ok: () => { fails = 0; }, pen: gpen, overlay: drawGlobePath, spun: flatSpun,  // spun: the noise globe turned on the globe; the flat map's tiles are stale too
     // the full FLUX.2 decoder over TAEF2, as on the flat maps: only when it is on, fits, and the page is left alone
     refineOK: () => !(G.lost || fullOff || !refineOn || convOnly || !avail.flux2 || G.options.decoder === 'flux2' || held || paused || switching) && performance.now() - lastInput >= IDLE_MS,
     refineReady: () => (fits ??= G.fullFits().then((ok) => { if (!ok) throw new Error(noRoomMsg); })).then(() => G.loadFull()),
@@ -1020,6 +1018,10 @@ async function main() {
   // ---- the noise globe: one for every layout. The flat maps are its host unless the globe shows. ----
   NG = createNoiseGlobe({ G, Q, $, GD, sh });
   let spunAt = 0, spunWait = false;
+  function flatSpun() {
+    const go = () => { spunAt = performance.now(); spunWait = false; epoch++; remake(); };
+    if (performance.now() - spunAt > 120) go(); else if (!spunWait) { spunWait = true; setTimeout(go, 120); }
+  }
   const flatHost = {
     centre() {
       const i = Math.floor(view.x), j = Math.floor(view.y); if (!tileIn(i, j)) return null;
@@ -1028,10 +1030,7 @@ async function main() {
     },
     // ponytail: a spin makes every flat tile again (at most every 120 ms); only the spun classes' tiles, as on the
     // globe, if spins feel slow
-    spun() {
-      const go = () => { spunAt = performance.now(); spunWait = false; epoch++; remake(); };
-      if (performance.now() - spunAt > 120) go(); else if (!spunWait) { spunWait = true; setTimeout(go, 120); }
-    },
+    spun(cs) { flatSpun(); if (gv) gv.spun(cs); },  // the globe too: its tiles of these classes are stale when it next shows
     idle: () => !inflight && !inflightP && !want.length,
   };
   NG.attach(flatHost);
@@ -1642,21 +1641,23 @@ async function main() {
   }
   // The rates and the readout, for whichever view shows: the flat map's counters, or the globe's (the same ones, kept
   // the same way). Every 250 ms it also writes the view into the link and redraws the flat minimap.
-  let lastGlobeURL = '', lastNoiseURL = '';
-  function noiseToURL() {  // the noise globe's spins, into the link as they settle
+  let lastGlobeURL = '', lastNoiseURL = '', tGlobeURL = 0, tNoiseURL = 0;
+  function noiseToURL() {  // the noise globe's spins, into the link, at most once a second
+    const now = performance.now(); if (now - tNoiseURL < 1000) return; tNoiseURL = now;
     const q = new URLSearchParams(location.search); NG.writeURL(q);
     const u = q.toString(); if (u === lastNoiseURL) return;
-    lastNoiseURL = u; history.replaceState(null, '', `${location.pathname}?${q}`);
+    lastNoiseURL = u; try { history.replaceState(null, '', `${location.pathname}?${q}`); } catch (e) { /* as above */ }
   }
-  function globeToURL() {
+  function globeToURL() {  // at most once a second (some browsers allow only 100 link updates in 30 s)
+    const now = performance.now(); if (now - tGlobeURL < 1000) return; tGlobeURL = now;
     const q = new URLSearchParams(location.search); gv.writeURL(q); q.delete('x'); q.delete('y');
     const u = q.toString(); if (u === lastGlobeURL) return;
-    lastGlobeURL = u; history.replaceState(null, '', `${location.pathname}?${q}`);
+    lastGlobeURL = u; try { history.replaceState(null, '', `${location.pathname}?${q}`); } catch (e) { /* too many link updates for this browser: the next one will do */ }
   }
   function hud(now) {
     const C = globeOn ? gv.counters() : { made, madeFlux, previews, busy, busyP, busyAny, refinedN, refining, viewTotal,
       left: farLeft >= 0 ? farLeft : want.length + pending.size, leftP: latFirst ? (farLeft >= 0 ? farZeros : wantEmpty) : 0 };
-    const win = () => ({ t: now, made: C.made, busy: C.busy, previews: C.previews, busyP: C.busyP, gen: G.generated - pathGen, busyAny: C.busyAny });
+    const win = () => ({ t: now, made: C.made, busy: C.busy, previews: C.previews, busyP: C.busyP, gen: G.generated - pathGen - NG.gen, busyAny: C.busyAny });
     if (rateReset) { rateReset = false; rate = rateP = rateG = 0; rateWin = win(); }  // another view's counters: measured afresh
     // Tiles per second of GPU time over the last second of work: decoded tiles while any decode is in flight, latent
     // previews while only previews are.
@@ -1665,7 +1666,7 @@ async function main() {
       if (db > 0.2) rate = (C.made - rateWin.made) / db;
       if (dp > 0.2) rateP = (C.previews - rateWin.previews) / dp;
       const da = C.busyAny - rateWin.busyAny;
-      if (da > 0.2) rateG = (G.generated - pathGen - rateWin.gen) / da;  // busyAny is tile work only, so path frames are left out
+      if (da > 0.2) rateG = (G.generated - pathGen - NG.gen - rateWin.gen) / da;  // busyAny is tile work only, so path frames are left out
       rateWin = win();
     }
     if (!globeOn && miniJob.key && now - tHud <= 250) drawMini();  // its background under construction: a slice every frame
@@ -1686,7 +1687,7 @@ async function main() {
       const fluxDec = G.options.decoder === 'flux2';
       let html = `<div class="head">This view: ${fmt(C.viewTotal)} tiles · ${held ? 'paused' : left ? `${fmt(left)} to go` : 'complete'}</div>`;
       // Conv shows its own rate, timed alone (lab.js convRate): its count rides on the generator, its cost does not.
-      html += `<table><tr class="gen"><td>Generated</td><td>${cn(G.generated - pathGen)}</td><td>${ps(rateG)}</td></tr>` + (latFirst && !latRaw ? `<tr><td>Decoded (Conv)</td><td>${cn(C.previews)}</td><td>${ps(G.convRate)}</td></tr>` : '')  /* raw latents: Generated says it */  // in the order they happen
+      html += `<table><tr class="gen"><td>Generated</td><td>${cn(G.generated - pathGen - NG.gen)}</td><td>${ps(rateG)}</td></tr>` + (latFirst && !latRaw ? `<tr><td>Decoded (Conv)</td><td>${cn(C.previews)}</td><td>${ps(G.convRate)}</td></tr>` : '')  /* raw latents: Generated says it */  // in the order they happen
         // Each decoder its own count (a switch keeps what the other made); the rate on the one in use, or 'refining'.
         + (!fluxDec || C.made > C.madeFlux ? `<tr><td>Decoded (TAEF2)</td><td>${cn(C.made - C.madeFlux)}</td><td>${fluxDec ? '' : ps(rate)}</td></tr>` : '')
         + (fluxDec || C.madeFlux || C.refinedN || C.refining ? `<tr><td>Decoded (FLUX.2)</td><td>${cn(C.madeFlux + C.refinedN)}</td><td>${fluxDec ? ps(rate) : C.refining ? 'refining' : ''}</td></tr>` : '') + '</table>';
@@ -1820,7 +1821,7 @@ async function main() {
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) return;
     tPrev = performance.now(); pump();
-    if (globeOn) rateReset = true; else rateWin = { t: tPrev, made, busy, previews, busyP, gen: G.generated - pathGen, busyAny };  // the globe's counters are its own
+    if (globeOn) rateReset = true; else rateWin = { t: tPrev, made, busy, previews, busyP, gen: G.generated - pathGen - NG.gen, busyAny };  // the globe's counters are its own
   });
   let path = new Path({ step: 0.05 }); const arrows = new Set();
   // Each layout has its own path: the flat maps' in their world (tiles), the globe's in a flat chart round the point
@@ -2052,11 +2053,9 @@ async function main() {
     if (n < 2 && !pathDot) return;
     accent ||= getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#C00404';
     g2.save(); g2.lineCap = 'round'; g2.lineJoin = 'round';
-    for (const [col, wid] of [['rgba(20,20,20,0.85)', 6 * k], ['#ffffff', 3 * k]]) {
-      g2.beginPath(); let on = false;
-      for (let q = 0; q < n; q++) { const v = pathScreen(P[q]); if (!v) { on = false; continue; } if (on) g2.lineTo(v[0] * k, v[1] * k); else g2.moveTo(v[0] * k, v[1] * k); on = true; }
-      g2.strokeStyle = col; g2.lineWidth = wid; g2.stroke();
-    }
+    g2.beginPath(); let on = false;  // one path, each point projected once, stroked twice
+    for (let q = 0; q < n; q++) { const v = pathScreen(P[q]); if (!v) { on = false; continue; } if (on) g2.lineTo(v[0] * k, v[1] * k); else g2.moveTo(v[0] * k, v[1] * k); on = true; }
+    for (const [col, wid] of [['rgba(20,20,20,0.85)', 6 * k], ['#ffffff', 3 * k]]) { g2.strokeStyle = col; g2.lineWidth = wid; g2.stroke(); }
     const D = dotAt(performance.now()), v = D && pathScreen(D);
     if (v) { g2.beginPath(); g2.arc(v[0] * k, v[1] * k, DOT_R * k, 0, 2 * Math.PI); g2.fillStyle = accent; g2.fill(); g2.lineWidth = 3 * k; g2.strokeStyle = '#ffffff'; g2.stroke(); }
     g2.restore();

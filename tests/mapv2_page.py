@@ -128,7 +128,7 @@ with sync_playwright() as p:
     # M hides the noise globe
     pg.keyboard.press('m'); pg.wait_for_timeout(200); h = pg.evaluate("document.getElementById('gmini').offsetWidth"); pg.keyboard.press('m'); pg.wait_for_timeout(200)
     check(h == 0 and pg.evaluate("document.getElementById('gmini').offsetWidth") > 0, 'M hides and shows the noise globe')
-    url = pg.url; rot = g()['rot']
+    pg.wait_for_timeout(1500); url = pg.url; rot = g()['rot']  # the link follows the view within a second
 
     # back to All classes: its tiles are still there
     pg.click('.lbtn[data-l="all"]'); pg.wait_for_timeout(1500); s = v()

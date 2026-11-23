@@ -2,7 +2,7 @@
 // class's 3 strongest directions comes from a point of a small globe: a smooth random field over the map gives each
 // tile a point, and each class turns that point by its own rotation. Spinning the small globe turns the rotation of
 // the class its caption names (the class at the view's centre); with Shift, of every class. Off, tiles keep their
-// purely random noise and nothing here runs.
+// purely random noise and nothing here does any work.
 import { geodesic, directions, tileZ, noiseField, noisePoint } from './globe.js?v=20261122m';
 
 const unit = (v) => { const r = Math.hypot(...v) || 1; return v.map((x) => x / r); };
@@ -37,7 +37,7 @@ function flinger(apply) {
 export function createNoiseGlobe(env) {
   const { G, Q, $, GD, sh } = env;
   const wrap = $('wrap'), mini = $('gmini'), mctx = mini.getContext('2d');
-  let on = false, host = null, hiddenByM = false, model = null, axes = null, R0 = null, dirCache = new Map();
+  let on = false, host = null, hiddenByM = false, model = null, axes = null, R0 = null, dirCache = new Map(), gen = 0;  // gen: generator passes for its own tiles
 
   // ---- each model's noise directions: per class, its 8 strongest directions of variation (noiseaxes.bin) ----
   async function loadModel(code) {
@@ -208,7 +208,7 @@ export function createNoiseGlobe(env) {
     if (i < 0 && idle && !miniPend.size && !sh.convOnly && G.options.decoder !== 'flux2') { dec = true; for (let k = 0; k < mg.n; k++) if (!miniDec[k] && front(k) > best) { best = front(k); i = k; } }
     if (i < 0) return;
     const pv = !dec && !!G.preview;
-    miniPend.add(i);
+    miniPend.add(i); gen++;
     const y = [mg.centres[3 * i], mg.centres[3 * i + 1], mg.centres[3 * i + 2]], q = [0, 1, 2].map((a) => H[3 * a] * y[0] + H[3 * a + 1] * y[1] + H[3 * a + 2] * y[2]);
     const zz = tileZ(dirsFor(mix).V, q, sh.psi, c.z0()), cv = Float32Array.from(G.classVec(mix));
     (pv ? G.preview(zz, cv, sh.NOISE).then((r) => (sh.latRaw ? r.raw : r.fit)) : G.generate(zz, cv, sh.NOISE))
@@ -237,8 +237,7 @@ export function createNoiseGlobe(env) {
   }
   return {
     get on() { return on; },
-    get model() { return model; },
-    loadModel,
+    get gen() { return gen; },  // for the readout: its tiles are not the map's
     async setOn(b) { if (b && model !== G.model) await loadModel(G.model); on = b; cenAt = -1; refresh(); },
     attach(h) { host = h; cenAt = -1; refresh(); },
     detach(h) { if (host === h) { host = null; refresh(); } },

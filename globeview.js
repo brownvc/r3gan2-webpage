@@ -22,6 +22,7 @@ export async function createGlobeView(env) {
   const anchorLevel = () => 7 - Math.round(Math.log2(clamp(sh.span, 1, 8)));
   let gLevel = anchorLevel();
   const g = geodesic(7, gLevel), N = g.n;
+  const anchorTables = new Map([[gLevel, { anchorOf: g.anchorOf, anchorTri: g.anchorTri }]]);
   const rad = new Float32Array(N);  // each cell's circumradius: the image is scaled so the cell fits it at any rotation
   const cellData = new Float32Array(N * 32);  // per cell: centre + radius, then 6 corners (a pentagon repeats its last), 8 vec4
   for (let i = 0; i < N; i++) {
@@ -40,8 +41,8 @@ export async function createGlobeView(env) {
   // Per tile: its class mix (cached per cell) and its z.
   let mixCache = new Array(N);
   const centre = (i) => [g.centres[3 * i], g.centres[3 * i + 1], g.centres[3 * i + 2]];
-  // As on the map, anchors: an anchor image (class mix, z) every 4 cells (the vertices of the tiling two levels
-  // coarser), and each cell blends the 3 around it (anchorWeights): the class mix, and z, put back at the typical length
+  // As on the map, anchors: an anchor image (class mix, z) every 1, 2, 4 or 8 cells (the vertices of the tiling 0 to 3
+  // levels coarser: Morphing), and each cell blends the 3 around it (anchorWeights): the class mix, and z, put back at the typical length
   // sqrt(Z). So a region's tiles morph from one sample to the next, and across a border into the next class.
   let ancMix = new Map(), ancZ = new Map();
   const anchorMix = (a) => { let m = ancMix.get(a); if (!m) { m = classMix(GF.points, centre(a), sh.soft, blocked, GF.spacing ??= nearestSpacing(GF.points, blocked)); ancMix.set(a, m); } return m; };
@@ -126,7 +127,8 @@ export async function createGlobeView(env) {
   const ctx = cv.getContext('webgpu'), fmtTex = navigator.gpu.getPreferredCanvasFormat();
   ctx.configure({ device: dev, format: fmtTex, alphaMode: 'opaque' });
   let dpr = 1, W = 0, H = 0;
-  const resize = () => { dpr = devicePixelRatio || 1; W = cv.width = lc.width = Math.round(wrap.clientWidth * dpr); H = cv.height = lc.height = Math.round(wrap.clientHeight * dpr); };
+  let cw = 0, ch = 0;  // the canvas's CSS size
+  const resize = () => { dpr = devicePixelRatio || 1; cw = wrap.clientWidth; ch = wrap.clientHeight; W = cv.width = lc.width = Math.round(cw * dpr); H = cv.height = lc.height = Math.round(ch * dpr); };
   new ResizeObserver(resize).observe(wrap); resize();
   const cellBuf = dev.createBuffer({ size: cellData.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
   dev.queue.writeBuffer(cellBuf, 0, cellData);
@@ -342,6 +344,7 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
   // smoothly between. gst keeps the cells' grid places from frame to frame.
   const NB = neighbours(g), morphArr = new Float32Array(MAXI * 4); let gst = {}, morphT = 0, gridded = 0;
   const smooth = (x) => { const t = clamp(x, 0, 1); return t * t * (3 - 2 * t); };
+  const WANT = 256, candD = new Float32Array(WANT), candI = new Int32Array(WANT);
   function frame() {
     if (!on) { looping = false; return; }  // another layout is showing: show() starts the frames again
     globeFling.step();
@@ -355,7 +358,7 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     morphT = smooth((2 * meanRad * zoom - 110) / 90);
     const vis = morphT > 0 ? [] : null, vpos = morphT > 0 ? new Map() : null;
     if (pointers.size > 0 || globeFling.on || zoom !== zoomGoal || sh.arrows.size > 0) movedAt = now;
-    const cand = []; let n = 0, best = -2; inView = 0; left = 0; leftP = 0;
+    let n = 0, best = -2, cn = 0; inView = 0; left = 0; leftP = 0;
     const wantRefine = !refining && env.refineOK(), near2 = [];
     const hw = W / 2, hh = H / 2;
     for (let i = 0; i < N; i++) {
@@ -374,7 +377,15 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
       if (wantRefine && have === 2) near2.push([vx * vx + vy * vy, i]);
       if (have >= 0 && n < MAXI) { const s = TIERS[have].slot.get(i); inst[4 * n] = i; inst[4 * n + 1] = have; inst[4 * n + 2] = s; n++; }
       // Conv alone: only cells that need a latent are wanted (the rest would fill the queue and never leave it)
-      if ((sh.convOnly ? nPv : made[i] !== epoch || have < need) && !pending.has(i)) cand.push([vx * vx + vy * vy, i]);
+      if ((sh.convOnly ? nPv : made[i] !== epoch || have < need) && !pending.has(i)) {
+        // the nearest WANT to the centre, kept in order as they are found: no list of every candidate, no sort
+        const d = vx * vx + vy * vy;
+        if (cn < WANT || d < candD[cn - 1]) {
+          let q = cn < WANT ? cn++ : cn - 1;
+          for (; q > 0 && candD[q - 1] > d; q--) { candD[q] = candD[q - 1]; candI[q] = candI[q - 1]; }
+          candD[q] = d; candI[q] = i;
+        }
+      }
     }
     drawn = n; lastInView = inView; gridded = 0;
     let gr = [1, 0, 0, 0];
@@ -396,7 +407,7 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     const pass = enc.beginRenderPass({ colorAttachments: [{ view: ctx.getCurrentTexture().createView(), clearValue: [0, 0, 0, 1], loadOp: 'clear', storeOp: 'store' }] });
     if (n) { pass.setPipeline(pipe); pass.setBindGroup(0, bind); pass.draw(18, n); }
     pass.end(); dev.queue.submit([enc.finish()]);
-    cand.sort((a, b) => a[0] - b[0]); want = cand.slice(0, 256).map((c) => c[1]);
+    want = Array.from(candI.subarray(0, cn));
     pump();
     if (wantRefine && !want.length && !pending.size && near2.length) { near2.sort((a, b) => a[0] - b[0]); refine(near2.map((c) => c[1])); }
     drawLabels(S);
@@ -406,7 +417,8 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
 
   // Over the tiles: the globe's edge, a grid fixed to the globe (strongest far out, where it shows the sphere), and
   // class names at their points, nearest the view's centre first, each only where it overlaps no other.
-  let nLabels = 0;
+  let nLabels = 0, labelDpr = 0; const labelWs = new Map();
+  const labelW = (c, t) => { if (labelDpr !== dpr) { labelWs.clear(); labelDpr = dpr; } let w = labelWs.get(c); if (w === undefined) { w = lctx.measureText(t).width; labelWs.set(c, w); } return w; };  // measured once per name
   function drawLabels(S) {
     lctx.clearRect(0, 0, W, H);
     lctx.strokeStyle = 'rgba(255,255,255,0.25)'; lctx.lineWidth = dpr;
@@ -437,7 +449,7 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     cand.sort((a, b) => a[0] - b[0]);
     const gap = 6 * dpr, th = 20 * dpr;
     for (const [, c, px, py] of cand) {
-      const t = G.names[c], tw = lctx.measureText(t).width + 14 * dpr, b = [px - tw / 2 - gap, py - th / 2 - gap, px + tw / 2 + gap, py + th / 2 + gap];
+      const t = G.names[c], tw = labelW(c, t) + 14 * dpr, b = [px - tw / 2 - gap, py - th / 2 - gap, px + tw / 2 + gap, py + th / 2 + gap];
       if (b[0] < 0 || b[1] < 0 || b[2] > W || b[3] > H || boxes.some((o) => b[0] < o[2] && o[0] < b[2] && b[1] < o[3] && o[1] < b[3])) continue;
       boxes.push(b); nLabels++;
       lctx.fillStyle = 'rgba(33,37,41,0.78)'; lctx.beginPath(); lctx.roundRect(px - tw / 2, py - th / 2, tw, th, th / 2); lctx.fill();
@@ -447,14 +459,24 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
   }
 
   // ---- the noise globe (noiseglobe.js): this view is its host while it shows ----
+  // These classes' noise turned (null: every class's): only the cells holding them are made again. A spin calls this on
+  // every pointer event, and marking the cells is a loop over all of them, so it runs at most every 120 ms.
+  let spunAt = 0, spunWait = false, spunSet = new Set(), spunAll = false;
+  function spun(cs) {
+    if (cs) for (const c of cs) spunSet.add(c); else spunAll = true;
+    const go = () => {
+      spunWait = false; if (!spunAll && !spunSet.size) return;  // already done by a call that came first
+      spunAt = performance.now(); if (spunAll) remake(); else remakeClasses([...spunSet]); spunSet = new Set(); spunAll = false;
+    };
+    if (performance.now() - spunAt > 120) go(); else if (!spunWait) { spunWait = true; setTimeout(go, 120); }
+  }
   const ngHost = {
     centre: () => (centreCell < 0 ? null : { mix: mixAt(centreCell), q: NG.field(Rm.slice(6, 9)), id: centreCell, z0: () => z0At(centreCell) }),
-    spun: (cs) => { if (cs) remakeClasses(cs); else remake(); },  // these classes' noise turned: only the cells holding them are made again
+    spun(cs) { spun(cs); env.spun(cs, true); },
     idle: () => !inflight && !inflightP && !want.length,
   };
 
   // ---- what the page drives ----
-  const tilePx = () => 2 * meanRad * zoom;  // CSS px per tile: the zoom the page shows and the link carries
   return {
     get model() { return model; },
     get n10() { return GF.n10; },
@@ -465,10 +487,13 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     },
     hide() { on = false; want = []; NG.detach(ngHost); },
     remake,
+    spun,  // the noise globe was spun while another layout showed
     settings(what) {  // a setting changed ('soft', 'span', 'seed' or 'all'): drop what it feeds; every tile is made again
       if (what === 'soft' || what === 'all') { mixCache = new Array(N); ancMix = new Map(); }
       if ((what === 'span' || what === 'all') && anchorLevel() !== gLevel) {
-        gLevel = anchorLevel(); const a = geodesic(7, gLevel); g.anchorOf = a.anchorOf; g.anchorTri = a.anchorTri; mixCache = new Array(N);
+        gLevel = anchorLevel(); let a = anchorTables.get(gLevel);
+        if (!a) { const t = geodesic(7, gLevel); a = { anchorOf: t.anchorOf, anchorTri: t.anchorTri }; anchorTables.set(gLevel, a); }  // built once per stop (0.8 s), then kept
+        g.anchorOf = a.anchorOf; g.anchorTri = a.anchorTri; mixCache = new Array(N);
       }
       if (what === 'seed' || what === 'all') { qCache = new Array(N); ancZ = new Map(); }  // the page gives the noise globe its new field first
       remake();
@@ -481,26 +506,26 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     // for the page's path tool: the point of the globe under a canvas position (null: off the globe), where a point
     // shows ([x, y] CSS px in the canvas, and its depth: > 0 facing the viewer), a frame's inputs there, the tile sizes
     pick(px, py) {
-      const x = (px - wrap.clientWidth / 2) / zoom, y = -(py - wrap.clientHeight / 2) / zoom, r2 = x * x + y * y; if (r2 >= 1) return null;
+      const x = (px - cw / 2) / zoom, y = -(py - ch / 2) / zoom, r2 = x * x + y * y; if (r2 >= 1) return null;
       const zc = Math.sqrt(1 - r2); return [Rm[0] * x + Rm[3] * y + Rm[6] * zc, Rm[1] * x + Rm[4] * y + Rm[7] * zc, Rm[2] * x + Rm[5] * y + Rm[8] * zc];
     },
-    project: (p) => [wrap.clientWidth / 2 + (Rm[0] * p[0] + Rm[1] * p[1] + Rm[2] * p[2]) * zoom, wrap.clientHeight / 2 - (Rm[3] * p[0] + Rm[4] * p[1] + Rm[5] * p[2]) * zoom, Rm[6] * p[0] + Rm[7] * p[1] + Rm[8] * p[2]],
+    project: (p) => [cw / 2 + (Rm[0] * p[0] + Rm[1] * p[1] + Rm[2] * p[2]) * zoom, ch / 2 - (Rm[3] * p[0] + Rm[4] * p[1] + Rm[5] * p[2]) * zoom, Rm[6] * p[0] + Rm[7] * p[1] + Rm[8] * p[2]],
     inputsAt,
     tileAngle: 2 * meanRad,  // a tile's size on the unit sphere
     tilePx: () => 2 * meanRad * zoom,
     get epoch() { return epoch; },
     zoomBy(f) { zoomGoal = clamp(zoomGoal * f, fitR() * 0.5, maxZoom()); },
-    zoomPct: () => 100 * tilePx() / S100,
+    zoomPct: () => 200 * meanRad * zoom / S100,
     zoomReset() { zoomGoal = clamp(S100 / (2 * meanRad), fitR() * 0.5, maxZoom()); },
     teleport() {  // a random turn: any point of the globe, equally likely
       const u = 2 * Math.random() - 1, t = 2 * Math.PI * Math.random(), r = Math.sqrt(1 - u * u);
-      Rm = facing([r * Math.cos(t), r * Math.sin(t), u]);
+      Rm = facing([r * Math.cos(t), r * Math.sin(t), u]); globeFling.down();  // and a flick under way stops
     },
     repreview() { for (const c of T16.slot.keys()) if (made[c] !== epoch) rePv.add(c); },  // Conv on or off: the latents shown, in the other colouring
     counters: () => ({ viewTotal: inView, left, leftP, made: madeN, madeFlux, previews: previewsN, busy, busyP, busyAny, refinedN, refining }),
     writeURL(q) {
       const r = (x) => +x.toFixed(4);
-      q.set('rot', Rm.map(r).join(',')); q.set('zoom', tilePx().toFixed(2));
+      q.set('rot', Rm.map(r).join(',')); q.set('zoom', (2 * meanRad * zoom).toFixed(2));
     },
   };
 }
