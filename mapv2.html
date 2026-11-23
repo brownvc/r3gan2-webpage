@@ -73,14 +73,15 @@
   #globe { touch-action: none; cursor: grab; }
   #globe.drag { cursor: grabbing; }
   #labels { pointer-events: none; }
-  .mapwrap { --mini: 200px; }
+  .mapwrap { --mini: 200px; --ngx: 224px; }  /* --ngx: the noise globe's left edge: beside the minimap, or on the globe in its place */
+  .mapwrap.onglobe { --ngx: 12px; }
   .mapwrap.minibig { --mini: 400px; }
-  #gmini { position: absolute; left: 12px; bottom: 12px; width: var(--mini); height: var(--mini); border-radius: 50%; background: transparent;
+  #gmini { position: absolute; left: var(--ngx); bottom: 12px; width: var(--mini); height: var(--mini); border-radius: 50%; background: transparent;
     cursor: grab; touch-action: none; }
-  #minicap { position: absolute; left: 12px; bottom: calc(var(--mini) + 18px); max-width: calc(var(--mini) + 120px); padding: 1px 8px;
+  #minicap { position: absolute; left: var(--ngx); bottom: calc(var(--mini) + 18px); max-width: calc(var(--mini) + 120px); padding: 1px 8px;
     border-radius: 4px; font-size: 12.5px; color: rgba(255, 255, 255, 0.85); background: rgba(33, 37, 41, 0.82); }
   #minicap .shift { font-size: 11.5px; color: rgba(255, 255, 255, 0.6); }
-  #minisize { position: absolute; left: calc(var(--mini) - 14px); bottom: calc(var(--mini) - 14px); width: 28px; height: 28px; padding: 0;
+  #minisize { position: absolute; left: calc(var(--ngx) + var(--mini) - 26px); bottom: calc(var(--mini) - 14px); width: 28px; height: 28px; padding: 0;
     display: grid; place-items: center; border: 0; border-radius: 50%; cursor: pointer; color: #fff; background: rgba(33, 37, 41, 0.82); }
   #minisize:hover { background: rgba(33, 37, 41, 0.95); }
   #minisize:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
@@ -200,6 +201,7 @@
     #gmini { top: 12px; right: 12px; left: auto; bottom: auto; }
     #minisize { top: calc(var(--mini) - 2px); right: 4px; left: auto; bottom: auto; }
     #minicap { display: none; }
+    .mapwrap.ng:not(.onglobe) #mini { display: none; }  /* room for one: the noise globe, while it is on */
     #credit { right: 8px; bottom: 4px; font-size: 11px; }
   }
   @media (max-width: 400px) { #mini { width: 96px; height: 96px; } .mapwrap { --mini: 96px; } }  /* clear of the readout (234 px) down to 360 px wide */
@@ -295,6 +297,9 @@
           <input id="nstr" type="range" min="0" max="2" step="0.1" value="1" title="Scales the noise field: 0 leaves it out, 1 is what the model was trained with">
           <div class="ends"><span>None</span><span>Twice</span></div>
         </div>
+        <div class="checks"><label><input id="ngon" type="checkbox"> Noise globe</label></div>
+        <p class="help" id="nghelp">Steer each class’s noise by hand: a small globe sets the noise along the class’s 3 strongest directions. Spin it to change the class it names; with Shift, every class.</p>
+        <p class="help" id="ngcode" hidden title="The noise of the class the noise globe names, as a rotation in degrees (axis times angle)"></p>
         <h3>Decoders</h3>
         <div class="seg" role="group" aria-label="Decoders: each on or off">
           <button class="dtog" data-d="conv" title="Each tile first shows its latent through a small linear map: instant, rough colour. Off: the latent itself, channels 1–3 as RGB">Conv<small>instant, rough</small></button><button class="dtog" data-d="taef2" title="TAEF2, the small decoder distilled from FLUX.2’s: fast enough for live maps">TAEF2<small>distilled, fast</small></button><button class="dtog" data-d="flux2" title="The full FLUX.2 decoder (FP32). With TAEF2 on, it redoes the tiles in view once you stop at close zoom; alone, it decodes every tile (slow)">FLUX.2<small>full, slow</small></button>
@@ -321,7 +326,8 @@
 <script type="module">
 import { createLab, MODELS, weightsFile, fileExists, savedInBrowser, gauss, hash2, rng, Z, fmt, DATA, SMALL_DEVICE } from './lab.js?v=20261121a';
 import { Path, Playhead } from './path.js?v=20261120b';
-import { createGlobeView } from './globeview.js?v=20261122a';
+import { createGlobeView } from './globeview.js?v=20261122b';
+import { createNoiseGlobe } from './noiseglobe.js?v=20261122a';
 const $ = (id) => document.getElementById(id);
 
 // Classes for the regions: visually distinct, and pleasant to blend between.
@@ -349,6 +355,7 @@ async function main() {
   const GD = (Q.get('data') || '.').replace(/\/?$/, '/'), gAvail = {};
   await Promise.all(Object.keys(MODELS).map(async (c) => { gAvail[c] = avail[c] && await fileExists(GD + `imagenet_${c}_noiseaxes.bin`); }));
   let gv = null, globeOn = false, gvBusy = false, miniOff = false, rateReset = false;
+  let NG = null;  // the noise globe (noiseglobe.js), for every layout; off unless Advanced > Noise turns it on
   let zg = null;  // the zoom's goal on the flat maps while it glides there: { s, mx, my } (see zoomGoal)
   let first = MODELS[Q.get('m')] && avail[Q.get('m')] ? Q.get('m') : Object.keys(MODELS).find((c) => avail[c]);
   if (!first) throw new Error('The models aren’t available here.');
@@ -496,15 +503,24 @@ async function main() {
     for (const c in mix) mix[c] /= t;
     return mix;
   }
-  function tileInputs(i, j) {  // -> { z, mix: { class: weight } }
+  function baseZ(i, j, scale) {  // a tile's z from the four anchors around it, on the sphere of typical samples times scale
     const fx = i / SPAN, fy = j / SPAN, a = Math.floor(fx), b = Math.floor(fy), tx = fx - a, ty = fy - b, z = new Float32Array(Z);
     for (const [p, q, w] of [[a, b, (1 - tx) * (1 - ty)], [a + 1, b, tx * (1 - ty)], [a, b + 1, (1 - tx) * ty], [a + 1, b + 1, tx * ty]]) {
       if (w) { const n = anchor(p, q).z; for (let k = 0; k < Z; k++) z[k] += w * n[k]; }
     }
     let s = 0; for (let k = 0; k < Z; k++) s += z[k] * z[k];
-    s = psi * R / Math.sqrt(s); for (let k = 0; k < Z; k++) z[k] *= s;  // on the sphere of typical samples, scaled by psi
-    return { z, mix: classMix(i, j) };
+    s = scale * R / Math.sqrt(s); for (let k = 0; k < Z; k++) z[k] *= s;
+    return z;
   }
+  function tileInputs(i, j) {  // -> { z, mix: { class: weight } }
+    const mix = classMix(i, j);
+    // the noise globe, when on: the tile's noise along its classes' 3 directions is the globe's point for it (it applies psi)
+    if (NG && NG.on) return { z: NG.z(baseZ(i, j, 1), mix, NG.field(fieldPt(i + 0.5, j + 0.5))), mix };
+    return { z: baseZ(i, j, psi), mix };  // scaled by psi
+  }
+  // A tile's place in the noise globe's field: the field varies over the unit sphere, where 1,000 classes sit about
+  // 0.112 apart, so a region (LC tiles) is given that much of it.
+  const fieldPt = (x, y) => [x * 0.112 / LC, y * 0.112 / LC, 0];
   const OFF = 2 ** 24, tkey = (i, j) => (i + OFF) * 2 ** 25 + (j + OFF);  // numeric tile keys, for big sets
   // ---- Endless names (All classes: drawDyn). As in All classes, each name has a fixed point and a fixed zoom from
   // which it shows, worked out from its region alone (lazily, cached), so what shows never depends on panning or on what
@@ -917,11 +933,12 @@ async function main() {
     const q = new URLSearchParams(location.search);
     q.set('m', G.model); q.set('dec', convOnly ? 'none' : o.decoder); q.set('flux', refineOn ? 1 : 0); q.set('h16', o.half ? 1 : 0); q.set('g16', o.gHalf ? 1 : 0);
     q.set('span', look.span); q.set('gspan', gspan); q.set('region', look.region); q.set('soft', look.soft); q.set('layout', globeOn ? 'globe' : look.layout); q.set('lat', latFirst ? 1 : 0);    if (latRaw) q.set('raw', 1); else q.delete('raw');
-    q.set('n', noiseSeed); q.set('ns', noiseStr);
+    q.set('n', noiseSeed); q.set('ns', noiseStr); if (NG) NG.writeURL(q);
     if (psi !== 1) q.set('psi', psi); else q.delete('psi'); q.delete('tz');
     $('trunc').value = psi; $('truncv').textContent = psi === 1 ? '1 (as trained)' : psi.toFixed(2);
     if (document.activeElement !== $('nseed')) $('nseed').value = noiseSeed;
     $('nstr').value = noiseStr; $('nstrv').textContent = noiseStr === 1 ? '1 (as trained)' : String(noiseStr);
+    if (NG) { $('ngon').checked = NG.on; $('ngon').disabled = switching || !gAvail[G.model]; $('nghelp').hidden = false; }
     for (const k of ['size', 'density', 'mode', 'fog']) q.delete(k);  // older parameters
     history.replaceState(null, '', `${location.pathname}?${q}`);
   }
@@ -953,7 +970,7 @@ async function main() {
     $('size').disabled = globeOn; $('draw').disabled = globeOn; $('fillk').disabled = globeOn;
     $('drawtxt').textContent = globeOn ? 'On the flat maps only' : 'Draw a path to animate; right-click clears';
     if (globeOn) $('filltxt').textContent = 'Nearest (the globe’s only order)'; else if (gv) $('filltxt').textContent = FILLS[fill][1];  // gv: not on the first call, before FILLS exists
-    $('noiserow').hidden = !globeOn;
+    $('noiserow').hidden = !(NG && NG.on);
     $('globenote').hidden = !globeOn;
     if (globeOn && gv) $('globenote').textContent = `Each class sits where the model’s own class codes put it, so there is no region size. On average ${(10 * gv.n10).toFixed(1)} of each class’s 10 nearest classes in the model are among its 10 nearest here.`;
     showConfig();
@@ -983,7 +1000,7 @@ async function main() {
   };
   const noRoomMsg = 'Zoomed in, tiles stay with TAEF2: the full decoder needs about 0.75 GB of GPU memory that does not seem free here.';
   const globeEnv = () => ({
-    G, Q, $, GD, S100, blocked, sh, fail: failed, ok: () => { fails = 0; },
+    G, Q, $, GD, S100, blocked, sh, NG, fail: failed, ok: () => { fails = 0; },
     // the full FLUX.2 decoder over TAEF2, as on the flat maps: only when it is on, fits, and the page is left alone
     refineOK: () => !(G.lost || fullOff || !refineOn || convOnly || !avail.flux2 || G.options.decoder === 'flux2' || held || paused || switching) && performance.now() - lastInput >= IDLE_MS,
     refineReady: () => (fits ??= G.fullFits().then((ok) => { if (!ok) throw new Error(noRoomMsg); })).then(() => G.loadFull()),
@@ -994,9 +1011,33 @@ async function main() {
     },
   });
   const showMinis = () => {  // the flat maps' minimap or the globe's noise globe, unless M hid it
-    mini.hidden = globeOn || miniOff;
-    for (const id of ['gmini', 'minicap', 'minisize']) $(id).hidden = !globeOn || miniOff;
+    mini.hidden = globeOn || miniOff; NG.setHidden(miniOff);
   };
+  // ---- the noise globe: one for every layout. The flat maps are its host unless the globe shows. ----
+  NG = createNoiseGlobe({ G, Q, $, GD, sh });
+  let spunAt = 0, spunWait = false;
+  const flatHost = {
+    centre() {
+      const i = Math.floor(view.x), j = Math.floor(view.y); if (!tileIn(i, j)) return null;
+      const mix = classMix(i, j); if (!Object.keys(mix).length) return null;
+      return { mix, q: NG.field(fieldPt(view.x, view.y)), id: i + ',' + j, z0: () => baseZ(i, j, 1) };
+    },
+    // ponytail: a spin makes every flat tile again (at most every 120 ms); only the spun classes' tiles, as on the
+    // globe, if spins feel slow
+    spun() {
+      const go = () => { spunAt = performance.now(); spunWait = false; epoch++; remake(); };
+      if (performance.now() - spunAt > 120) go(); else if (!spunWait) { spunWait = true; setTimeout(go, 120); }
+    },
+    idle: () => !inflight && !inflightP && !want.length,
+  };
+  NG.attach(flatHost);
+  // On or off: every tile is made again, with or without the noise globe's part of its noise.
+  async function setNoiseGlobe(b) {
+    try { await NG.setOn(b && !!gAvail[G.model]); }
+    catch (e) { console.error(e); $('cfgnote').textContent = `The noise globe couldn’t start: ${e.message || e}`; }
+    epoch++; remake(); if (gv) gv.remake(); showLook();
+  }
+  $('ngon').onchange = () => setNoiseGlobe($('ngon').checked);
   async function setGlobe(on) {
     if (on === globeOn || gvBusy) return;
     if (on) {
@@ -1007,9 +1048,9 @@ async function main() {
       } catch (e) { console.error(e); $('cfgnote').textContent = `The globe couldn’t start: ${e.message || e}`; status(''); gvBusy = false; showLook(); pump(); return; }
       status(''); gvBusy = false;
       setDraw(false); clearPath();
-      globeOn = true; cv.hidden = true; $('globe').hidden = false; $('labels').hidden = false; showMinis(); gv.show();
+      globeOn = true; wrap.classList.add('onglobe'); cv.hidden = true; $('globe').hidden = false; $('labels').hidden = false; showMinis(); gv.show();
     } else {
-      gv.hide(); globeOn = false; $('globe').hidden = true; $('labels').hidden = true; cv.hidden = false; showMinis();
+      gv.hide(); globeOn = false; wrap.classList.remove('onglobe'); NG.attach(flatHost); $('globe').hidden = true; $('labels').hidden = true; cv.hidden = false; showMinis();
       tNear = 0; tFar = 0; lastView = '';  // the link takes the flat view again (its zoom was the globe's)
       pump();
     }
@@ -1046,7 +1087,11 @@ async function main() {
   }
   // A new model on the globe also loads that model's globe (its classes sit elsewhere); hidden, the globe loads it when next shown.
   document.querySelectorAll('.mbtn').forEach((b) => b.onclick = () => {
-    if (b.dataset.m !== G.model) configure(async () => { await G.setModel(b.dataset.m); if (globeOn) await gv.loadModel(b.dataset.m); });
+    const m = b.dataset.m;
+    if (m !== G.model) configure(async () => {
+      await G.setModel(m); if (globeOn) await gv.loadModel(m);
+      if (NG.on) await NG.setOn(!!gAvail[m]);  // the new model's noise directions, or off where it has none here
+    });
   });
   function decoders() { return { conv: !latRaw, taef2: !convOnly && G.options.decoder === 'taef2', flux2: !convOnly && (G.options.decoder === 'flux2' || refineOn) }; }
   // A toggle: Conv switches latents first; TAEF2 and FLUX.2 pick the lab's decoder (TAEF2 if on, else FLUX.2), FLUX.2
@@ -1135,7 +1180,7 @@ async function main() {
     seed = clamp(Math.floor(seed) || 0, 0, 999999);
     if (seed === noiseSeed && str === noiseStr) return;
     const newSeed = seed !== noiseSeed;
-    noiseSeed = seed; noiseStr = str; NOISE = makeNoise(); epoch++; remake(); if (gv) gv.settings(newSeed ? 'seed' : ''); showConfig();
+    noiseSeed = seed; noiseStr = str; NOISE = makeNoise(); if (newSeed) NG.seed(); epoch++; remake(); if (gv) gv.settings(newSeed ? 'seed' : ''); showConfig();
   }
   $('nseed').addEventListener('change', () => { setNoise(+$('nseed').value, noiseStr); $('nseed').value = noiseSeed; });  // shows what was applied
   $('nprev').onclick = () => setNoise(noiseSeed - 1, noiseStr);
@@ -1593,7 +1638,12 @@ async function main() {
   }
   // The rates and the readout, for whichever view shows: the flat map's counters, or the globe's (the same ones, kept
   // the same way). Every 250 ms it also writes the view into the link and redraws the flat minimap.
-  let lastGlobeURL = '';
+  let lastGlobeURL = '', lastNoiseURL = '';
+  function noiseToURL() {  // the noise globe's spins, into the link as they settle
+    const q = new URLSearchParams(location.search); NG.writeURL(q);
+    const u = q.toString(); if (u === lastNoiseURL) return;
+    lastNoiseURL = u; history.replaceState(null, '', `${location.pathname}?${q}`);
+  }
   function globeToURL() {
     const q = new URLSearchParams(location.search); gv.writeURL(q); q.delete('x'); q.delete('y');
     const u = q.toString(); if (u === lastGlobeURL) return;
@@ -1645,7 +1695,9 @@ async function main() {
         rows.sort((a, b) => (a[3] - b[3]) || (a[2] - b[2]));
         html += `<div class="cap">Time to finish this view</div><table>${rows.map(([n, s, x]) => `<tr${x <= 1 ? ' class="ours"' : ''}><td>${n}</td><td>${Number.isFinite(s) ? (s < 1 ? dur(s) : `~${dur(s)}`) : '…'}</td><td class="plus"${x === 0 ? ' title="Adds to the time below: the Conv previews come first"' : ''}>${x === 0 ? '+' : ''}</td></tr>`).join('')}</table>`;
       }
-      if (globeOn) html += gv.extraHTML();  // the globe's own line: the centre class and its noise directions
+      html += NG.lineHTML();  // the noise globe, when on: the centre class and what its 3 directions carry
+      const code = NG.code(); if ($('ngcode').textContent !== code) { $('ngcode').textContent = code; $('ngcode').hidden = !code; }
+      noiseToURL(); window.__noise = NG.state();
       if (html !== hudHTML) $('stats').innerHTML = hudHTML = html;
       window.__v2 = { layout: globeOn ? 'globe' : look.layout, zoomPct: globeOn ? gv.zoomPct() : 100 * view.s / S100, held, viewTotal: C.viewTotal, left, made: C.made, previews: C.previews, epoch };
     }
@@ -2009,6 +2061,7 @@ async function main() {
   });
   addEventListener('keyup', (e) => arrows.delete(e.key));
   addEventListener('blur', () => arrows.clear());
+  if (Q.get('ng') === '1' && gAvail[G.model]) await setNoiseGlobe(true);  // a link with the noise globe on
   if (Q.get('layout') === 'globe' && gAvail[G.model]) setGlobe(true);  // a link to the globe
 }
 

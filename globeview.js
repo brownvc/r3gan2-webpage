@@ -1,7 +1,7 @@
 // The class globe as a view of mapv2.html: globe.html's script as a module. The page owns the panel, the lab (G) and
 // the settings; this view reads them live through env.sh and is told when they change (settings, remake, loadModel).
 import { gauss, Z, SMALL_DEVICE } from './lab.js?v=20261121a';
-import { geodesic, classMix, directions, tileZ, noiseField, noisePoint, tierFor, neighbours, gridTargets, anchorWeights, nearestSpacing } from './globe.js?v=20261122l';
+import { geodesic, classMix, tierFor, neighbours, gridTargets, anchorWeights, nearestSpacing } from './globe.js?v=20261122l';
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const ARROWS = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
 
@@ -10,16 +10,10 @@ const ARROWS = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], Arrow
 // noiseStr, NOISE, held, paused, latRaw, convOnly, arrows), ok() and fail(e) (a tile made, or failed), refineOK(),
 // refineReady() and refineFailed(e) (the full FLUX.2 decoder, when zoomed in and idle).
 export async function createGlobeView(env) {
-  const { G, Q, $, GD, S100, blocked, sh } = env, dev = G.device;
-  async function globeFiles(code) {
-    const pre = GD + `imagenet_${code}_`;
-    const [lay, aj, ab] = await Promise.all([fetch(pre + 'classlayout.json').then((r) => r.json()), fetch(pre + 'noiseaxes.json').then((r) => r.json()),
-      fetch(pre + 'noiseaxes.bin').then((r) => r.arrayBuffer())]);
-    const rec = new Float32Array(ab), C = rec.length / 521;
-    if (C !== 1000) throw new Error(`noiseaxes.bin holds ${C} classes, not 1000`);
-    const axes = { trace: new Float32Array(C), lambda: new Float32Array(C * 8), U: new Float32Array(C * 512) };
-    for (let c = 0; c < C; c++) { axes.trace[c] = rec[c * 521]; axes.lambda.set(rec.subarray(c * 521 + 1, c * 521 + 9), c * 8); axes.U.set(rec.subarray(c * 521 + 9, c * 521 + 521), c * 512); }
-    return { points: Float32Array.from(lay.points.flat()), n10: lay.neighbours10, axes, R0: Float32Array.from(aj.R0.flat()) };
+  const { G, Q, $, GD, S100, blocked, sh, NG } = env, dev = G.device;
+  async function globeFiles(code) {  // where this model's class codes put each class on the globe
+    const lay = await fetch(GD + `imagenet_${code}_classlayout.json`).then((r) => r.json());
+    return { points: Float32Array.from(lay.points.flat()), n10: lay.neighbours10 };
   }
   let model = G.model, GF = await globeFiles(model);  // the model as asked for: G.model may change during the fetch
 
@@ -42,16 +36,9 @@ export async function createGlobeView(env) {
   }
 
   const unit = (v) => { const r = Math.hypot(...v) || 1; return v.map((x) => x / r); };
-  let P = [0, 0, 1];  // the all-classes noise rotation's third row
 
-  // Per tile: its class mix (cached per cell), the mix's noise directions (cached per mix), its z.
-  let mixCache = new Array(N), dirCache = new Map();
-  const mixKey = (mix) => Object.keys(mix).map((k) => `${k}:${mix[k].toFixed(3)}`).join(',');
-  function dirsFor(mix) {
-    const key = mixKey(mix); let d = dirCache.get(key);
-    if (!d) { d = directions(mix, GF.axes, GF.R0); dirCache.set(key, d); if (dirCache.size > 20000) dirCache.delete(dirCache.keys().next().value); }
-    return d;
-  }
+  // Per tile: its class mix (cached per cell) and its z.
+  let mixCache = new Array(N);
   const centre = (i) => [g.centres[3 * i], g.centres[3 * i + 1], g.centres[3 * i + 2]];
   // As on the map, anchors: an anchor image (class mix, z) every 4 cells (the vertices of the tiling two levels
   // coarser), and each cell blends the 3 around it (anchorWeights): the class mix, and z, put back at the typical length
@@ -73,19 +60,12 @@ export async function createGlobeView(env) {
     s = Math.sqrt(Z / s); for (let k = 0; k < Z; k++) z[k] *= s;
     return z;
   }
-  // Each tile's noise point: the smooth random field at its place on the globe, turned by its class's rotation: Mc for
-  // a class whose noise was spun on its own, else Mm (every class's). A tile blending classes blends their turned
-  // points by its class weights, so a spin reaches into the next class only through the border tiles.
-  let NF = noiseField(sh.noiseSeed), qCache = new Array(N);
-  const Mc = new Map();
-  function noiseOf(mix, q) {
-    const n = [0, 0, 0];
-    for (const c in mix) { const M = Mc.get(+c) ?? Mm, w = mix[c]; for (let t = 0; t < 3; t++) n[t] += w * (M[t] * q[0] + M[3 + t] * q[1] + M[6 + t] * q[2]); }
-    return unit(n);
-  }
+  // Each tile's z: its base z, with the noise globe's point for it when the noise globe is on (noiseglobe.js). qCache:
+  // each cell's point of the noise field.
+  let qCache = new Array(N);
   function tileInputs(i) {
-    const mix = mixAt(i), q = (qCache[i] ??= noisePoint(NF, centre(i)));
-    return { z: tileZ(dirsFor(mix).V, noiseOf(mix, q), sh.psi, z0At(i)), mix };
+    const mix = mixAt(i), q = (qCache[i] ??= NG.field(centre(i)));
+    return { z: NG.z(z0At(i), mix, q), mix };
   }
 
   // ---- tile images: GPU texture arrays at 16, 64 and 256 px. Every tile made keeps a 16 px copy; 64 and 256 px keep
@@ -266,7 +246,7 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
   // first, as many in flight as the lab has slots ----
   // As on the map: a cell showing nothing gets its latent preview first (G.preview, 32 px, kept on the GPU for its
   // decode), then is decoded; previews and decodes each have their own slots, and both go nearest the centre first.
-  let inflight = 0, inflightP = 0, madeN = 0, madeFlux = 0, previewsN = 0, remadeN = 0, want = [], on = false, looping = false, miniLooping = false;
+  let inflight = 0, inflightP = 0, madeN = 0, madeFlux = 0, previewsN = 0, remadeN = 0, want = [], on = false, looping = false;
   let left = 0, leftP = 0, busy = 0, busyP = 0, busyAny = 0;  // for the readout: in view still to decode, still to preview; the stages' clocks
   const pending = new Set();
   // rePv: cells whose latent preview is made again (Conv switched on or off). refined: cells whose image is the full
@@ -382,7 +362,7 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     pump();
     if (wantRefine && !want.length && !pending.size && near2.length) { near2.sort((a, b) => a[0] - b[0]); refine(near2.map((c) => c[1])); }
     drawLabels(S);
-    window.__globe = { drawn, inView, made: madeN, model: G.model, rot: Rm.slice(), zoom, p: P.slice(), epoch, psi: sh.psi, on, mini: miniImg.filter(Boolean).length, miniN: mg.n, labels: nLabels, previews: previewsN, remade: remadeN, morph: morphT, gridded, gridAngle: gst.e1 ? (Math.atan2(gst.e1[1], gst.e1[0]) * 180) / Math.PI : 0, Mm: Mm.slice(), spun: Object.fromEntries(Mc), stale, madeCells, miniView: Vm.slice(), miniFront: Dm.slice(6, 9), noiseCentre: noiseCentre() };
+    window.__globe = { drawn, inView, made: madeN, model: G.model, rot: Rm.slice(), zoom, epoch, psi: sh.psi, on, labels: nLabels, previews: previewsN, remade: remadeN, morph: morphT, gridded, gridAngle: gst.e1 ? (Math.atan2(gst.e1[1], gst.e1[0]) * 180) / Math.PI : 0, stale, madeCells };
     requestAnimationFrame(frame);
   }
 
@@ -427,162 +407,12 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     }
   }
 
-  // The globe's own line under the page's readout: the class at the centre and how much its noise directions carry.
-  function extraHTML() {
-    if (centreCell < 0) return '';
-    const mix = mixAt(centreCell), top = Object.keys(mix).sort((a, b) => mix[b] - mix[a])[0], d = dirsFor(mix);
-    return `<div class="cap" style="white-space: normal">Centre: ${G.names[top]}. These 3 noise directions carry ${Math.round(100 * d.share)}% of the variation here${sh.psi !== 1 ? ' (measured at ψ = 1)' : ''}.</div>`;
-  }
-
-  // ---- the noise globe (minimap) ----
-  const mini = $('gmini'), mctx = mini.getContext('2d');
-  let Mm = [1, 0, 0, 0, 1, 0, 0, 0, 1];  // its rotation; P is the point facing the viewer: Mm's third row
-  // The link carries the whole rotation (nm): P alone leaves its turn about P open, and every tile's noise depends on it.
-  const nm = Q.has('nm') ? Q.get('nm').split(',').map(Number) : [];
-  if (nm.length === 9 && nm.every(Number.isFinite)) {
-    const r0 = unit(nm.slice(0, 3)), r1u = nm.slice(3, 6), d = r1u.reduce((s, x, i) => s + x * r0[i], 0), r1 = unit(r1u.map((x, i) => x - d * r0[i]));
-    Mm = [...r0, ...r1, r0[1] * r1[2] - r0[2] * r1[1], r0[2] * r1[0] - r0[0] * r1[2], r0[0] * r1[1] - r0[1] * r1[0]]; P = Mm.slice(6, 9);
-  } else if (Q.has('p')) Mm = facing(P);
-  const ortho = (M) => {  // re-orthonormalise rows against drift
-    const r0 = unit(M.slice(0, 3)), r1u = M.slice(3, 6), d = r1u.reduce((s, x, i) => s + x * r0[i], 0), r1 = unit(r1u.map((x, i) => x - d * r0[i]));
-    return [...r0, ...r1, r0[1] * r1[2] - r0[2] * r1[1], r0[2] * r1[0] - r0[0] * r1[2], r0[0] * r1[1] - r0[1] * r1[0]];
+  // ---- the noise globe (noiseglobe.js): this view is its host while it shows ----
+  const ngHost = {
+    centre: () => (centreCell < 0 ? null : { mix: mixAt(centreCell), q: NG.field(Rm.slice(6, 9)), id: centreCell, z0: () => z0At(centreCell) }),
+    spun: (cs) => { if (cs) remakeClasses(cs); else remake(); },  // these classes' noise turned: only the cells holding them are made again
+    idle: () => !inflight && !inflightP && !want.length,
   };
-  const tr = (A) => [A[0], A[3], A[6], A[1], A[4], A[7], A[2], A[5], A[8]];
-  // The minimap is drawn turned by Vm, which only a drag on it changes: it never moves on its own. Underneath, Dm
-  // turns, unseen, so the noise at the main view's centre (Mm^T q, q the field there) is always at the front, under the
-  // ring: the point drawn at s holds the noise Dm^T s. Turning the class globe changes what the minimap's tiles hold,
-  // not where it points.
-  let Dm = [1, 0, 0, 0, 1, 0, 0, 0, 1], Vm = [1, 0, 0, 0, 1, 0, 0, 0, 1];
-  const noiseCentre = () => noiseOf(centreCell >= 0 ? mixAt(centreCell) : {}, noisePoint(NF, Rm.slice(6, 9)));
-  // the classes the caption names, whose noise a spin turns: the strongest at the view centre, and the next if >= 0.3
-  const named = (mix) => { const top = Object.keys(mix).sort((a, b) => mix[b] - mix[a]).map(Number); return top.length > 1 && mix[top[1]] >= 0.3 ? top.slice(0, 2) : top.slice(0, 1); };
-  // the link carries each spun class's rotation (nc=class:9 numbers;...), after the all-classes one (nm)
-  for (const part of (Q.get('nc') || '').split(';')) {
-    const [c, m] = part.split(':'), M = (m || '').split(',').map(Number);
-    if (Number.isInteger(+c) && +c >= 0 && +c < G.names.length && M.length === 9 && M.every(Number.isFinite)) Mc.set(+c, ortho(M));
-  }
-  function faceMini() {  // the smallest turn of Dm that brings noiseCentre() to the front
-    const n = noiseCentre(), v = [0, 1, 2].map((a) => Dm[3 * a] * n[0] + Dm[3 * a + 1] * n[1] + Dm[3 * a + 2] * n[2]);
-    if (v[2] > 1 - 1e-9) return;
-    if (v[2] < -0.9999) { Dm = mul([1, 0, 0, 0, -1, 0, 0, 0, -1], Dm); return; }
-    const k = [v[1], -v[0], 0], K = [0, -k[2], k[1], k[2], 0, -k[0], -k[1], k[0], 0], K2 = mul(K, K), f = 1 / (1 + v[2]);
-    Dm = ortho(mul([0, 1, 2, 3, 4, 5, 6, 7, 8].map((j) => (j % 4 === 0) + K[j] + K2[j] * f), Dm));
-  }
-  let mAll = false;  // this drag (and its flick) turns every class's noise: Shift was down at its start
-  function spinMini(dx, dy) {  // a drag (or flick) of dx, dy CSS px on the minimap
-    const r = mini.clientWidth / 2, ax = dx / r, ay = dy / r;
-    const cy = Math.cos(ax), sy = Math.sin(ax), cx = Math.cos(ay), sx = Math.sin(ay);
-    const R = mul([1, 0, 0, 0, cx, -sx, 0, sx, cx], [cy, 0, sy, 0, 1, 0, -sy, 0, cy]);
-    // the drawn globe turns by R; the view centre's noise becomes the point now at the front: M <- M Dm^T R Dm, for the
-    // named classes (each from its own rotation, or Mm's), or with Shift for every class
-    const X = mul(tr(Dm), mul(R, Dm));
-    if (mAll) { Mm = ortho(mul(Mm, X)); for (const [c, M] of Mc) Mc.set(c, ortho(mul(M, X))); P = Mm.slice(6, 9); remake(); }
-    else if (centreCell >= 0) { const cs = named(mixAt(centreCell)); for (const c of cs) Mc.set(c, ortho(mul(Mc.get(c) ?? Mm, X))); remakeClasses(cs); }
-    Dm = ortho(mul(R, Dm)); Vm = ortho(mul(R, Vm));
-  }
-  const miniFling = flinger(spinMini);
-  let mdrag = null;
-  mini.addEventListener('pointerdown', (e) => { mini.setPointerCapture(e.pointerId); mdrag = [e.clientX, e.clientY]; mAll = e.shiftKey; miniFling.down(); });
-  mini.addEventListener('pointermove', (e) => {
-    if (!mdrag) return;
-    const dx = e.clientX - mdrag[0], dy = e.clientY - mdrag[1]; mdrag = [e.clientX, e.clientY];
-    spinMini(dx, dy); miniFling.move(dx, dy);
-  });
-  const mup = () => { if (mdrag) miniFling.up(); mdrag = null; }; mini.addEventListener('pointerup', mup); mini.addEventListener('pointercancel', mup);
-  function drawMini() {
-    if (!on) { miniLooping = false; return; }
-    if (mini.hidden) { requestAnimationFrame(drawMini); return; }  // M hides it
-    const s = Math.round(mini.clientWidth * dpr); if (mini.width !== s || mini.height !== s) { mini.width = s; mini.height = s; }
-    miniFling.step();
-    const r = s / 2 - 2 * dpr; mctx.clearRect(0, 0, s, s); faceMini(); const D = Vm;
-    const gr = mctx.createRadialGradient(s / 2 - r / 3, s / 2 - r / 3, r / 10, s / 2, s / 2, r);
-    gr.addColorStop(0, '#3a4a66'); gr.addColorStop(1, '#0e1420');
-    mctx.fillStyle = gr; mctx.beginPath(); mctx.arc(s / 2, s / 2, r, 0, 2 * Math.PI); mctx.fill();
-    // a coordinate grid fixed to the noise globe, so its turning shows
-    mctx.strokeStyle = 'rgba(255,255,255,0.28)'; mctx.lineWidth = dpr;
-    const line = (f) => { mctx.beginPath(); let on = false;
-      for (let t = 0; t <= 96; t++) { const p = f(2 * Math.PI * t / 96), vz = D[6] * p[0] + D[7] * p[1] + D[8] * p[2];
-        const x = s / 2 + r * (D[0] * p[0] + D[1] * p[1] + D[2] * p[2]), y = s / 2 - r * (D[3] * p[0] + D[4] * p[1] + D[5] * p[2]);
-        if (vz > 0) { if (on) mctx.lineTo(x, y); else mctx.moveTo(x, y); on = true; } else on = false; }
-      mctx.stroke(); };
-    for (let k = 1; k < 6; k++) { const la = Math.PI * (k / 6 - 0.5); line((t) => [Math.cos(la) * Math.cos(t), Math.sin(la), Math.cos(la) * Math.sin(t)]); }
-    for (let k = 0; k < 6; k++) { const lo = Math.PI * k / 6; line((t) => [Math.cos(t) * Math.cos(lo), Math.sin(t), Math.cos(t) * Math.sin(lo)]); }
-    // its tiles, once made: the noise globe of the class at the main view's centre. Each is a cell of the sphere with its
-    // image laid upright on the cell's tangent plane and shaded, as the main globe's shader does (orthographic, so affine).
-    const rot = (p) => [D[0] * p[0] + D[1] * p[1] + D[2] * p[2], D[3] * p[0] + D[4] * p[1] + D[5] * p[2], D[6] * p[0] + D[7] * p[1] + D[8] * p[2]];
-    const fade = Math.max(0, 1 - (performance.now() - miniMixSince) / 500);  // another class's tiles fade out over 0.5 s
-    for (let i = 0; i < mg.n; i++) {
-      const img = miniImg[i]; if (!img) continue;
-      const a = miniMixOf[i] === miniMix ? 1 : fade; if (a <= 0) continue;
-      mctx.globalAlpha = a;
-      const c = rot([mg.centres[3 * i], mg.centres[3 * i + 1], mg.centres[3 * i + 2]]); if (c[2] <= 0) continue;
-      let up = [-c[1] * c[0], 1 - c[1] * c[1], -c[1] * c[2]]; if (Math.hypot(...up) < 1e-4) up = [-c[2] * c[0], -c[2] * c[1], 1 - c[2] * c[2]];
-      up = unit(up); const rt = [up[1] * c[2] - up[2] * c[1], up[2] * c[0] - up[0] * c[2], up[0] * c[1] - up[1] * c[0]];
-      const R = miniRad[i], w = img.width, k = (r * 2 * R) / w;
-      mctx.save(); mctx.beginPath();
-      for (let j = mg.cellStart[i]; j < mg.cellStart[i + 1]; j++) { const q = rot([mg.corners[3 * j], mg.corners[3 * j + 1], mg.corners[3 * j + 2]]); mctx.lineTo(s / 2 + r * q[0], s / 2 - r * q[1]); }
-      mctx.closePath(); mctx.clip();
-      mctx.setTransform(k * rt[0], -k * rt[1], -k * up[0], k * up[1], s / 2 + r * (c[0] - R * rt[0] + R * up[0]), s / 2 - r * (c[1] - R * rt[1] + R * up[1]));
-      mctx.drawImage(img, 0, 0); mctx.setTransform(1, 0, 0, 1, 0, 0);
-      mctx.fillStyle = `rgba(0,0,0,${0.45 * (1 - c[2])})`; mctx.fill(); mctx.restore();
-    }
-    mctx.globalAlpha = 1;
-    // the ring: the noise at the main view's centre, which the minimap always turns to its front
-    mctx.strokeStyle = '#E8B04A'; mctx.lineWidth = 2 * dpr;
-    mctx.beginPath(); mctx.arc(s / 2, s / 2, 6 * dpr, 0, 2 * Math.PI); mctx.stroke();
-    requestAnimationFrame(drawMini);
-  }
-  // The minimap's tiles: 162 points of the noise sphere, for the class mix at the main view's centre, which its
-  // caption names. When that mix changes, the old mix's tiles fade out and the new ones fill in.
-  const mg = geodesic(2); let miniImg = [], miniKey = '', miniMix = '', miniMixSince = 0;
-  const miniMixOf = [];
-  $('minisize').onclick = () => {
-    const big = wrap.classList.toggle('minibig'), b = $('minisize'), t = big ? 'Smaller noise globe' : 'Larger noise globe';
-    b.setAttribute('aria-pressed', String(big)); b.title = t; b.setAttribute('aria-label', t);
-  };
-  const miniRad = Array.from({ length: mg.n }, (_, i) => {  // each cell's circumradius, as rad[] for the main globe
-    let m = 0; for (let j = mg.cellStart[i]; j < mg.cellStart[i + 1]; j++) m = Math.max(m, Math.hypot(...[0, 1, 2].map((t) => mg.corners[3 * j + t] - mg.centres[3 * i + t])));
-    return m;
-  });
-  // A tile drawn at Vm y holds the noise Dm^T Vm y, so its key carries that turn (rounded: a small turn keeps the
-  // tiles; a drag on the minimap turns Dm and Vm together, so it keeps them all). Every tile, back included, gets its
-  // Conv-decoded latent (32 px, cheap), 3 at a time even while the class globe has work, so the minimap is whole
-  // and can be spun at once; a tile is decoded with TAEF2 only when the class globe has nothing to do. Front first;
-  // old tiles stay drawn until replaced. While the class globe turns, the minimap holds what it has: a new key (class or
-  // noise) is taken only once it has stayed the same for SETTLE_MS, so a spin across classes causes one switch, not many.
-  const miniOf = [], miniDec = [], miniPend = new Set(), MINI_SLOTS = 3, SETTLE_MS = 400;
-  let nextKey = '', nextSince = 0;
-  function miniPump() {
-    if (!on || mini.hidden || sh.held || sh.paused || G.lost || centreCell < 0 || miniPend.size >= MINI_SLOTS) return;
-    const H = mul(tr(Dm), Vm), mix = mixAt(centreCell);
-    const key = [mixKey(mix), centreCell, sh.psi, sh.noiseSeed, sh.noiseStr, G.model, G.options.half, G.options.gHalf, sh.latRaw, H.map((x) => Math.round(x * 20)).join()].join('|');  // centreCell: its z
-    if (key !== miniKey) {
-      if (key !== nextKey) { nextKey = key; nextSince = performance.now(); }
-      if (performance.now() - nextSince < SETTLE_MS) return;
-    }
-    miniKey = key;
-    const mk = mixKey(mix);
-    if (mk !== miniMix) {
-      miniMix = mk; miniMixSince = performance.now();
-      const top = Object.keys(mix).sort((a, b) => mix[b] - mix[a]), two = top.length > 1 && mix[top[1]] >= 0.3;
-      $('minicapt').textContent = `Noise for ${G.names[top[0]]}${two ? ` and ${G.names[top[1]]}` : ''}: spin to change`;
-    }
-    const idle = !inflight && !inflightP && !want.length, front = (k) => Vm[6] * mg.centres[3 * k] + Vm[7] * mg.centres[3 * k + 1] + Vm[8] * mg.centres[3 * k + 2];
-    let i = -1, best = -2, dec = false;
-    for (let k = 0; k < mg.n; k++) if (miniOf[k] !== key && !miniPend.has(k) && front(k) > best) { best = front(k); i = k; }
-    if (i < 0 && idle && !miniPend.size && !sh.convOnly && G.options.decoder !== 'flux2') { dec = true; for (let k = 0; k < mg.n; k++) if (!miniDec[k] && front(k) > best) { best = front(k); i = k; } }
-    if (i < 0) return;
-    const pv = !dec && !!G.preview;
-    miniPend.add(i);
-    const y = [mg.centres[3 * i], mg.centres[3 * i + 1], mg.centres[3 * i + 2]], q = [0, 1, 2].map((a) => H[3 * a] * y[0] + H[3 * a + 1] * y[1] + H[3 * a + 2] * y[2]);
-    const z = tileZ(dirsFor(mix).V, q, sh.psi, z0At(centreCell)), c = Float32Array.from(G.classVec(mix));
-    (pv ? G.preview(z, c, sh.NOISE).then((r) => (sh.latRaw ? r.raw : r.fit)) : G.generate(z, c, sh.NOISE))
-      .then((img) => createImageBitmap(img, pv ? {} : { resizeWidth: 64, resizeHeight: 64, resizeQuality: 'high' }))
-      .then((b) => { if (key === miniKey) { if (miniImg[i]) miniImg[i].close(); miniImg[i] = b; miniOf[i] = key; miniDec[i] = !pv; miniMixOf[i] = mk; } else b.close(); })
-      .catch((e) => console.error(e)).finally(() => { miniPend.delete(i); miniPump(); });
-    miniPump();
-  }
-  setInterval(miniPump, 50);
 
   // ---- what the page drives ----
   const tilePx = () => 2 * meanRad * zoom;  // CSS px per tile: the zoom the page shows and the link carries
@@ -592,22 +422,22 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
     show() {  // each loop is started once: a hide and show within one frame must not start a second
       if (on) return; on = true; lastFrame = performance.now();
       if (!looping) { looping = true; requestAnimationFrame(frame); }
-      if (!miniLooping) { miniLooping = true; requestAnimationFrame(drawMini); }
+      NG.attach(ngHost);
     },
-    hide() { on = false; want = []; },
+    hide() { on = false; want = []; NG.detach(ngHost); },
     remake,
     settings(what) {  // a setting changed ('soft', 'span', 'seed' or 'all'): drop what it feeds; every tile is made again
       if (what === 'soft' || what === 'all') { mixCache = new Array(N); ancMix = new Map(); }
       if ((what === 'span' || what === 'all') && anchorLevel() !== gLevel) {
         gLevel = anchorLevel(); const a = geodesic(7, gLevel); g.anchorOf = a.anchorOf; g.anchorTri = a.anchorTri; mixCache = new Array(N);
       }
-      if (what === 'seed' || what === 'all') { NF = noiseField(sh.noiseSeed); qCache = new Array(N); ancZ = new Map(); }
+      if (what === 'seed' || what === 'all') { qCache = new Array(N); ancZ = new Map(); }  // the page gives the noise globe its new field first
       remake();
     },
     async loadModel(code) {  // each model places the classes its own way: its files, and a globe made afresh
       if (code === model) return;
       GF = await globeFiles(code); model = code;
-      mixCache = new Array(N); ancMix = new Map(); dirCache = new Map(); epoch++; clearTiles(); refined.clear(); rePv.clear();
+      mixCache = new Array(N); ancMix = new Map(); epoch++; clearTiles(); refined.clear(); rePv.clear();
     },
     zoomBy(f) { zoomGoal = clamp(zoomGoal * f, fitR() * 0.5, maxZoom()); },
     zoomPct: () => 100 * tilePx() / S100,
@@ -616,14 +446,11 @@ fn at(px: f32, s: u32, uv: vec2f) -> vec3f {  // atlas position of slot s's uv, 
       const u = 2 * Math.random() - 1, t = 2 * Math.PI * Math.random(), r = Math.sqrt(1 - u * u);
       Rm = facing([r * Math.cos(t), r * Math.sin(t), u]);
     },
-    toggleMini() { const h = !mini.hidden; for (const id of ['gmini', 'minicap', 'minisize']) $(id).hidden = h; },
     repreview() { for (const c of T16.slot.keys()) if (made[c] !== epoch) rePv.add(c); },  // Conv on or off: the latents shown, in the other colouring
     counters: () => ({ viewTotal: inView, left, leftP, made: madeN, madeFlux, previews: previewsN, busy, busyP, busyAny, refinedN, refining }),
-    extraHTML,
     writeURL(q) {
       const r = (x) => +x.toFixed(4);
-      q.set('rot', Rm.map(r).join(',')); q.set('zoom', tilePx().toFixed(2)); q.set('nm', Mm.map(r).join(','));
-      if (Mc.size) q.set('nc', [...Mc].map(([c, M]) => `${c}:${M.map(r).join(',')}`).join(';')); else q.delete('nc');
+      q.set('rot', Rm.map(r).join(',')); q.set('zoom', tilePx().toFixed(2));
     },
   };
 }

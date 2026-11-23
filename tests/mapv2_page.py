@@ -42,10 +42,10 @@ with sync_playwright() as p:
     pg.wait_for_function(f'{G} && {G}.on && {G}.drawn >= 50', timeout=180000); pg.wait_for_timeout(600)
     s = v(); check(s['layout'] == 'globe' and pressed('.lbtn[data-l="globe"]') == 'true', 'Globe shows')
     vis = pg.evaluate('''() => ['map', 'globe', 'labels', 'mini', 'gmini', 'minicap', 'minisize'].map((i) => document.getElementById(i).offsetWidth > 0)''')
-    check(vis == [False, True, True, False, True, True, True], f'the globe takes the map\'s place, the noise globe the minimap\'s: {vis}')
+    check(vis == [False, True, True, False, False, False, False], f'the globe takes the map\'s place; the noise globe is off by default: {vis}')
     dis = pg.evaluate('''() => ['size', 'draw', 'fillk', 'span', 'soft', 'trunc', 'pause', 'teleport', 'zin'].map((i) => document.getElementById(i).disabled)''')
     check(dis == [True, True, True, False, False, False, False, False, False], f'Region size, Draw and Fill are off on the globe; the rest work: {dis}')
-    txt = pg.inner_text('#stats'); check('This view' in txt and 'Generated' in txt and 'Centre:' in txt, f'the map\'s readout, with the globe\'s centre line: {txt[:60]!r}...')
+    txt = pg.inner_text('#stats'); check('This view' in txt and 'Generated' in txt and 'Centre:' not in txt, f'the map\'s readout on the globe: {txt[:60]!r}...')
     check('layout=globe' in pg.url and 'rot=' in pg.url, 'the link carries the globe and its view')
     check(abs(s['zoomPct'] - 100) < 2, f"the globe starts at 100%: {s['zoomPct']:.1f}")
     # zoom buttons and keys
@@ -90,6 +90,25 @@ with sync_playwright() as p:
     check(ok, f"Conv alone: a new seed remakes the latents in view ({g()['previews'] - p0} of {n0})")
     pg.keyboard.press('+'); pg.keyboard.press('+'); pg.wait_for_timeout(1200)
     pg.click('.dtog[data-d="taef2"]'); pg.wait_for_function(f'{G}.made > {m2}', timeout=120000); check(True, 'TAEF2 back on: tiles are decoded again')
+    # the noise globe: an Advanced option, off by default; on, it shows and steers the class it names
+    N = 'window.__noise'
+    pg.wait_for_function(f'{V}.left === 0', timeout=180000); e2 = g()['epoch']; pg.check('#ngon')
+    pg.wait_for_function(f'{N} && {N}.shown && {N}.tiles >= 20', timeout=120000); pg.wait_for_timeout(600)
+    cap = pg.inner_text('#minicap'); code = pg.inner_text('#ngcode'); txt = pg.inner_text('#stats')
+    check(g()['epoch'] > e2 and 'Noise for' in cap and 'Shift' in cap and 'Centre:' in txt and 'ng=1' in pg.url, f'the noise globe turns on: tiles made again, caption {cap.splitlines()[0]!r}, readout line, link')
+    check('as every class' in code and not pg.evaluate("document.getElementById('noiserow').hidden"), f'its code shows in Advanced: {code!r}')
+    mb = pg.locator('#gmini').bounding_box(); mx, my = mb['x'] + mb['width'] / 2, mb['y'] + mb['height'] / 2
+    def spin(dx=6, dy=-3):
+        pg.mouse.move(mx, my); pg.mouse.down()
+        for k in range(10): pg.mouse.move(mx + dx * k, my + dy * k)
+        pg.wait_for_timeout(150); pg.mouse.up()
+    pg.wait_for_function(f'{V}.left === 0', timeout=180000); n0 = pg.evaluate(N); e3 = g()['epoch']; spin(); pg.wait_for_timeout(400); n1 = pg.evaluate(N); s = g()
+    check(len(n1['spun']) >= 1 and n1['Mm'] == n0['Mm'] and s['epoch'] == e3 and 0 < s['stale'] < s['madeCells'], f"a spin turns the named class's noise only ({list(n1['spun'])}) and remakes its tiles only: {s['stale']} of {s['madeCells']}")
+    check(n1['view'] != n0['view'] and 'as every class' not in pg.inner_text('#ngcode') and 'nc=' in pg.url, f"the small globe turns, its code and the link follow: {pg.inner_text('#ngcode')!r}")
+    pg.keyboard.down('Shift'); spin(-5, 4); pg.keyboard.up('Shift'); pg.wait_for_timeout(300); n2 = pg.evaluate(N)
+    check(n2['Mm'] != n1['Mm'] and g()['epoch'] > e3, "a Shift-spin turns every class's noise")
+    v0 = n2['view']; pg.mouse.move(cx, cy); pg.mouse.down(); pg.mouse.move(cx + 80, cy + 30, steps=8); pg.wait_for_timeout(150); pg.mouse.up(); pg.wait_for_timeout(300); n3 = pg.evaluate(N)
+    check(n3['view'] == v0 and max(abs(a - b) for a, b in zip(n3['front'], n3['centre'])) < 1e-3, "turning the class globe leaves the noise globe still, facing the centre's noise")
     # M hides the noise globe
     pg.keyboard.press('m'); pg.wait_for_timeout(200); h = pg.evaluate("document.getElementById('gmini').offsetWidth"); pg.keyboard.press('m'); pg.wait_for_timeout(200)
     check(h == 0 and pg.evaluate("document.getElementById('gmini').offsetWidth") > 0, 'M hides and shows the noise globe')
@@ -109,6 +128,18 @@ with sync_playwright() as p:
     check(pg.evaluate(f'{G}.on') and v()['layout'] == 'globe', f'quick layout toggles end on the globe ({n} frames in a second)')
     pg.click('.lbtn[data-l="all"]'); pg.wait_for_timeout(800)
     pg.wait_for_function(f'{V}.left === 0', timeout=180000); check(True, 'the flat view completes (made again after the seed change)')
+    # the noise globe on the flat map: beside the minimap; a spin makes the map again; its spins came along from the globe
+    pos = pg.evaluate("() => ['mini', 'gmini'].map((i) => { const r = document.getElementById(i).getBoundingClientRect(); return [Math.round(r.left), Math.round(r.width)]; })")
+    check(pos[0][1] > 0 and pos[1][1] > 0 and pos[1][0] >= pos[0][0] + pos[0][1], f'on the flat map the noise globe sits beside the minimap: {pos}')
+    nf = pg.evaluate(N); check(nf['spun'].keys() == n2['spun'].keys(), 'the spun classes are the same in every layout')
+    pg.wait_for_function(f'{N}.tiles >= 20', timeout=120000)
+    mb = pg.locator('#gmini').bounding_box(); mx, my = mb['x'] + mb['width'] / 2, mb['y'] + mb['height'] / 2
+    e4 = v()['epoch']; spin(); pg.wait_for_timeout(500); nf2 = pg.evaluate(N)
+    check(v()['epoch'] > e4 and len(nf2['spun']) >= len(nf['spun']) and nf2['view'] != nf['view'], f"a spin on the flat map turns its centre class's noise and makes the map again: {pg.inner_text('#minicap').splitlines()[0]!r}")
+    pg.wait_for_function(f'{V}.left === 0', timeout=180000)
+    pg.uncheck('#ngon'); pg.wait_for_timeout(500)
+    check(pg.evaluate("document.getElementById('gmini').offsetWidth") == 0 and 'ng=' not in pg.url and 'Centre:' not in pg.inner_text('#stats'), 'off again: no noise globe, no readout line, not in the link')
+    pg.wait_for_function(f'{V}.left === 0', timeout=180000)
     # Conv alone on the flat map: a new seed makes the latents shown again (no stale tiles)
     pg.click('.dtog[data-d="taef2"]'); pg.wait_for_timeout(500); s = v(); p0, n0 = s['previews'], s['viewTotal']; pg.click('#nnext')
     try: pg.wait_for_function(f'{V}.previews >= {p0} + 0.9 * {n0}', timeout=60000); ok = True
