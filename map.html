@@ -286,7 +286,7 @@
 </div>
 
 <script type="module">
-import { createLab, MODELS, weightsFile, fileExists, savedInBrowser, gauss, hash2, rng, Z, fmt, DATA, SMALL_DEVICE } from './lab.js?v=20261121a';
+import { createLab, MODELS, weightsFile, fileExists, savedInBrowser, gauss, hash2, rng, Z, fmt, DATA, SMALL_DEVICE } from './lab.js?v=20261122c';
 import { Path, Playhead } from './path.js?v=20261120b';
 const $ = (id) => document.getElementById(id);
 
@@ -313,7 +313,7 @@ async function main() {
   let first = MODELS[Q.get('m')] && avail[Q.get('m')] ? Q.get('m') : Object.keys(MODELS).find((c) => avail[c]);
   if (!first) throw new Error('The models aren’t available here.');
   await G.setModel(first);
-  const start = { half: G.hasF16 && Q.get('h16') !== '0', gHalf: G.hasF16 && Q.get('g16') === '1', decoder: avail.flux2 && Q.get('dec') === 'flux2' ? 'flux2' : 'taef2' };
+  const start = { half: G.hasF16 && Q.get('h16') !== '0', gHalf: G.hasF16 && Q.get('g16') !== '0', decoder: avail.flux2 && Q.get('dec') === 'flux2' ? 'flux2' : 'taef2' };
   try { await G.setOptions(start); } catch (e) { $('cfgnote').textContent = 'The FLUX.2 decoder could not start here, so the map uses TAEF2.'; await G.setOptions({ ...start, decoder: 'taef2' }); }
   status('');
   // The panel can be hidden to a small tab; this browser remembers which (storage may be unavailable: then it is open).

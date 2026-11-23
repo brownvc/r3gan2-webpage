@@ -318,9 +318,9 @@
   });
 </script>
 <script type="module">
-import { createFastGAN } from './fastgan.js?v=20261118c';
+import { createFastGAN } from './fastgan.js?v=20261122c';
 import { DATA } from './config.js';
-import { cachedBytes as stored, gauss, savedInBrowser, gpuLostNotice, scoped, gpuLabel, SMALL_DEVICE } from './lab.js?v=20261121a';  // one copy of the storage code
+import { cachedBytes as stored, gauss, savedInBrowser, gpuLostNotice, scoped, gpuLabel, SMALL_DEVICE } from './lab.js?v=20261122c';  // one copy of the storage code
 const data = (f) => DATA + f;  // weights, embeddings, test vectors, decoder
 const log = (s) => { document.getElementById('log').textContent += s + '\n'; console.log(s); };
 let lastErr = ''; const logOnce = (s) => { if (s !== lastErr) { lastErr = s; log(s); } };  // for errors that recur every frame
@@ -367,7 +367,7 @@ async function main() {
     let gpuErrors = 0;
     device.addEventListener('uncapturederror', (e) => { if (gpuErrors++ < 3) log('WebGPU error: ' + e.error.message); if (gpuErrors === 1) $('status').textContent = 'GPU error: ' + e.error.message; });
     log(`GPU: ${gpuLabel(adapter.info || {})}. FP16 ${hasF16 ? 'supported' : 'not supported'}.`);
-    if (!hasF16) { $('th16').checked = false; $('th16').disabled = $('gh16').disabled = true; }
+    if (!hasF16) { $('th16').checked = $('gh16').checked = false; $('th16').disabled = $('gh16').disabled = true; }
     return true;
   }
   // Inside the project page, the frame's own view of whether it is on screen: off screen, nothing starts or runs.
@@ -377,7 +377,7 @@ async function main() {
     new IntersectionObserver((es) => { onScreen = es.some((e) => e.isIntersecting); }).observe(document.documentElement);
   }
   const untilOnScreen = () => new Promise((go) => { const t = setInterval(() => { if (onScreen) { clearInterval(t); go(); } }, 100); });
-  $('gh16').checked = false; $('full').checked = false;  // Chrome restores checkbox state on reload
+  $('gh16').checked = true; $('full').checked = false;  // Chrome restores checkbox state on reload; FP16 generator by default where supported
   if (SMALL_DEVICE) { $('full').disabled = true; $('full').parentElement.title = 'Needs a larger device'; }  // the 200 MB FP32 decoder
 
   // Models. Each one's files carry its prefix (see demo/convert.py).

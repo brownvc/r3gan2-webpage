@@ -1,6 +1,6 @@
 // For map.html: createLab() gives a WebGPU device and a pipelined generator that can switch model, decoder and
 // precision; weights are kept in the same browser storage as the live generator.
-import { createFastGAN } from './fastgan.js?v=20261118c';
+import { createFastGAN } from './fastgan.js?v=20261122c';
 import { DATA } from './config.js';
 export { DATA };
 
@@ -225,7 +225,7 @@ export async function createLab({ onStatus = () => {}, onLost = () => {} } = {})
 
   let model = null;                 // { code, man, wbin, embed }
   const nets = new Map();           // `${half}${gHalf}` -> { net, packBG }, for the current model
-  const opts = { half: hasF16, gHalf: false, decoder: 'taef2' };
+  const opts = { half: hasF16, gHalf: hasF16, decoder: 'taef2' };
   async function buildNet() {
     const key = `${opts.half && hasF16}${opts.gHalf && hasF16}`;
     if (!nets.has(key)) {
