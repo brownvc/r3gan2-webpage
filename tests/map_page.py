@@ -1,11 +1,11 @@
-"""Page test for mapv2.html: the flat maps and the globe in one page, with one set of controls (Playwright, Chrome
+"""Page test for map.html: the flat maps and the globe in one page, with one set of controls (Playwright, Chrome
 with WebGPU). Serve the repo with the globe's data files, then:
-    python tests/mapv2_page.py [url]
-default url: http://localhost:8768/mapv2.html"""
+    python tests/map_page.py [url]
+default url: http://localhost:8768/map.html"""
 import sys, math
 from playwright.sync_api import sync_playwright
 
-URL = sys.argv[1] if len(sys.argv) > 1 else 'http://localhost:8768/mapv2.html'
+URL = sys.argv[1] if len(sys.argv) > 1 else 'http://localhost:8768/map.html'
 V, G = 'window.__v2', 'window.__globe'
 
 def check(cond, what):

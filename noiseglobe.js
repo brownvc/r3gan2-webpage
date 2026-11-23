@@ -1,4 +1,4 @@
-// The noise globe of mapv2.html, for every layout (off by default: Advanced > Noise). On, each tile's noise along its
+// The noise globe of map.html, for every layout (off by default: Advanced > Noise). On, each tile's noise along its
 // class's 3 strongest directions comes from a point of a small globe: a smooth random field over the map gives each
 // tile a point, and each class turns that point by its own rotation. Spinning the small globe turns the rotation of
 // the class its caption names (the class at the view's centre); with Shift, of every class. Off, tiles keep their

@@ -29,9 +29,9 @@
   .mapwrap { position: relative; flex: 1; min-height: 0; background: #000; font-size: 16px; line-height: 1.5; }
   #map { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
   #map.drag { cursor: grabbing; }
-  #map.pen { cursor: crosshair; }
-  #map.ondot { cursor: pointer; }  /* over the path's dot: drag it to scrub */
-  #map.scrub { cursor: grabbing; }
+  #map.pen, #globe.pen { cursor: crosshair; }
+  #map.ondot, #globe.ondot { cursor: pointer; }  /* over the path's dot: drag it to scrub */
+  #map.scrub, #globe.scrub { cursor: grabbing; }
   /* Overlays on the map keep a fixed dark backdrop in both themes, like the ones on index.html's image. */
   #status { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); max-width: calc(100% - 40px);
     padding: 10px 16px; border-radius: 8px; background: rgba(33, 37, 41, 0.88); color: #E8B04A; font-weight: 600; text-align: center; }
@@ -67,6 +67,28 @@
     border: 1px solid rgba(255, 255, 255, 0.35); background: #000; cursor: crosshair; touch-action: none;
     box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35); }
   #mini[hidden] { display: none; }
+  /* The Globe layout: its canvas and its labels take the map's place; its minimap is the noise globe, with a caption
+     naming its class and a size button at its top right. */
+  #globe, #labels { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  #globe { touch-action: none; cursor: grab; }
+  #globe.drag { cursor: grabbing; }
+  #labels { pointer-events: none; }
+  .mapwrap { --mini: 200px; --ngx: 224px; }  /* --ngx: the noise globe's left edge: beside the minimap, or on the globe in its place */
+  .mapwrap.onglobe { --ngx: 12px; }
+  .mapwrap.minibig { --mini: 400px; }
+  #gmini { position: absolute; left: var(--ngx); bottom: 12px; width: var(--mini); height: var(--mini); border-radius: 50%; background: transparent;
+    cursor: grab; touch-action: none; }
+  #minicap { position: absolute; left: var(--ngx); bottom: calc(var(--mini) + 18px); max-width: calc(var(--mini) + 120px); padding: 1px 8px;
+    border-radius: 4px; font-size: 12.5px; color: rgba(255, 255, 255, 0.85); background: rgba(33, 37, 41, 0.82); }
+  #minicap .shift { font-size: 11.5px; color: rgba(255, 255, 255, 0.6); }
+  #minisize { position: absolute; left: calc(var(--ngx) + var(--mini) - 26px); bottom: calc(var(--mini) - 14px); width: 28px; height: 28px; padding: 0;
+    display: grid; place-items: center; border: 0; border-radius: 50%; cursor: pointer; color: #fff; background: rgba(33, 37, 41, 0.82); }
+  #minisize:hover { background: rgba(33, 37, 41, 0.95); }
+  #minisize:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+  #minisize svg { width: 14px; height: 14px; }
+  #minisize .shrink, .minibig #minisize .grow { display: none; }
+  .minibig #minisize .shrink { display: inline; }
+  #map[hidden], #globe[hidden], #labels[hidden], #gmini[hidden], #minicap[hidden], #minisize[hidden] { display: none; }
 
   /* The controls rail, as on index.html. */
   /* A fixed header (title, hide button) over a scrolling body, so the scrollbar stays inside the rounded panel. */
@@ -174,15 +196,23 @@
     .railtab svg { transform: rotate(-90deg); }
     /* The panel takes the bottom here and the readout the top left, so the minimap goes top right. */
     #mini { top: 12px; right: 12px; left: auto; bottom: auto; width: 120px; height: 120px; }
+    .mapwrap { --mini: 120px; }
+    .mapwrap.minibig { --mini: 220px; }
+    #gmini { top: 12px; right: 12px; left: auto; bottom: auto; }
+    #minisize { top: calc(var(--mini) - 2px); right: 4px; left: auto; bottom: auto; }
+    #minicap { display: none; }
+    .mapwrap.ng:not(.onglobe) #mini { display: none; }  /* room for one: the noise globe, while it is on */
     #credit { right: 8px; bottom: 4px; font-size: 11px; }
   }
-  @media (max-width: 400px) { #mini { width: 96px; height: 96px; } }  /* clear of the readout (234 px) down to 360 px wide */
-  @media (max-height: 500px) and (min-width: 701px) { #mini { width: 120px; height: 120px; } }  /* a phone held sideways: room for the map */
+  @media (max-width: 400px) { #mini { width: 96px; height: 96px; } .mapwrap { --mini: 96px; } }  /* clear of the readout (234 px) down to 360 px wide */
+  @media (max-height: 500px) and (min-width: 701px) { #mini { width: 120px; height: 120px; } .mapwrap { --mini: 120px; } }  /* a phone held sideways: room for the map */
 </style>
 </head>
 <body>
 <div class="mapwrap" id="wrap">
   <canvas id="map"></canvas>
+  <canvas id="globe" hidden></canvas>
+  <canvas id="labels" hidden></canvas>
   <div id="stats" title="Tiles made so far, and the time to fill this view: here, and with three well-known models at their compute per image"></div>
   <div id="pathwin" hidden role="region" aria-label="Path animation">
     <div id="pathbar" title="Drag to move">Path</div>
@@ -191,6 +221,9 @@
     <div class="prow"><button type="button" id="pathplay">Pause</button><button type="button" id="pathclear">Clear</button></div>
   </div>
   <canvas id="mini" title="Minimap: click or drag to go there (M hides it)" aria-label="Minimap"></canvas>
+  <div id="minicap" hidden><span id="minicapt">Noise: spin to change</span><br><span class="shift">+ Shift: all classes (careful!)</span></div>
+  <canvas id="gmini" hidden title="The noise globe: spin it to move the named class along its strongest noise directions; Shift-spin moves every class (M hides it)" aria-label="Noise globe"></canvas>
+  <button id="minisize" hidden title="Larger noise globe" aria-label="Larger noise globe" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path class="grow" d="M9.5 2.5h4v4M13.5 2.5 9 7M6.5 13.5h-4v-4M2.5 13.5 7 9"/><path class="shrink" d="M13 7H9V3M9 7l4.5-4.5M3 9h4v4M7 9l-4.5 4.5"/></svg></button>
   <div id="status" role="status">Starting WebGPU…</div>
 
   <button class="railtab" id="railtab" hidden title="Show the panel (H)" aria-controls="rail"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Settings</button>
@@ -204,11 +237,12 @@
       <div class="links"><a href="./">Project page</a><a href="https://github.com/brownvc/R3GAN2">Code</a><a href="#">Weights</a></div>
       <p class="help">Every tile is generated live on your GPU.</p>
       <table class="ctl" aria-label="View controls">
-        <tr><th>Pan</th><td class="c"><span class="how">drag</span></td><td>Flick to glide</td></tr>
+        <tr><th>Move</th><td class="c"><span class="how">drag</span></td><td>Flick to glide; arrow keys</td></tr>
         <tr><th>Zoom</th><td class="c"><span class="zoom"><button class="k" id="zout" title="Zoom out (&minus; key)" aria-label="Zoom out">&minus;</button><button class="pct" id="zpct" title="Back to 100%">100%</button><button class="k" id="zin" title="Zoom in (+ key)" aria-label="Zoom in">+</button></span></td><td>Scroll or pinch</td></tr>
         <tr><th>Teleport</th><td class="c"><button class="k" id="teleport" title="Teleport (T key)">T</button></td><td>Jump somewhere new</td></tr>
         <tr><th>Pause</th><td class="c"><button class="k" id="pause" aria-pressed="false" title="Pause (P key)">P</button></td><td id="pausetxt">Stop or resume</td></tr>
         <tr><th>Draw</th><td class="c"><button class="k" id="draw" aria-pressed="false" title="Draw a path (D key)">D</button></td><td>Draw a path to animate; right-click clears</td></tr>
+        <tr id="noiserow" hidden><th>Noise</th><td class="c"><span class="how">spin</span></td><td title="Spinning the noise globe changes the noise of the class it names; with Shift held, of every class">Spin the small globe; Shift: all classes</td></tr>
       </table>
       <p class="note" id="cfgnote"></p>
     </section>
@@ -216,7 +250,7 @@
     <section>
       <h2>Map</h2>
       <div class="seg" role="group" aria-label="Map layout">
-        <button class="lbtn" data-l="all" title="Every ImageNet class once, arranged by WordNet’s hierarchy so related classes sit together. Leaves out 7 clothing classes whose training photos mostly show people in swimwear or underwear.">All 1,000 classes<small>Hilbert curve layout</small></button><button class="lbtn" data-l="endless" title="Regions of hand-picked classes, drawn at random on a plane with no edge">Endless<small>random regions forever</small></button>
+        <button class="lbtn" data-l="all" title="Every ImageNet class once, arranged by WordNet’s hierarchy so related classes sit together. Leaves out 7 clothing classes whose training photos mostly show people in swimwear or underwear.">2D Hilbert<small>1,000 classes</small></button><button class="lbtn" data-l="globe" title="Every ImageNet class once on a globe, placed by the model’s own class codes: neighbours in the model are neighbours here. Leaves out the same 7 clothing classes.">Globe t-SNE<small>1,000 classes</small></button><button class="lbtn" data-l="endless" title="Regions of hand-picked classes, drawn at random on a plane with no edge">2D Endless<small>Random classes</small></button>
       </div>
       <div class="slider">
         <div class="slabel"><label for="span">Morphing</label><span class="val" id="spanv"></span></div>
@@ -235,6 +269,7 @@
         <div class="ends"><span>Hard</span><span>Soft</span></div>
       </div>
       <p class="help" id="spannote"></p>
+      <p class="help" id="globenote" hidden></p>
     </section>
 
     <section>
@@ -255,7 +290,8 @@
           <div class="ends"><span>More typical</span><span>More varied</span></div>
         </div>
         <h3>Noise</h3>
-        <p class="help">Each visit draws its own noise, so your map is yours alone; the link keeps it.</p>
+        <div class="checks"><label><input id="ngon" type="checkbox"> Noise globe</label></div>
+        <p class="help" id="ngcode" hidden title="The noise of the class the noise globe names, as a rotation in degrees (axis times angle)"></p>
         <div class="bar"><label for="nseed">Seed</label><input id="nseed" type="number" min="0" max="999999" step="1"><button class="plain" id="nprev" aria-label="Previous noise seed">&lsaquo;</button><button class="plain" id="nnext" aria-label="Next noise seed">&rsaquo;</button><button class="plain" id="newn">Random</button></div>
         <div class="slider">
           <div class="slabel"><label for="nstr">Strength</label><span class="val" id="nstrv"></span></div>
@@ -288,6 +324,8 @@
 <script type="module">
 import { createLab, MODELS, weightsFile, fileExists, savedInBrowser, gauss, hash2, rng, Z, fmt, DATA, SMALL_DEVICE } from './lab.js?v=20261122d';
 import { Path, Playhead } from './path.js?v=20261120b';
+import { createGlobeView } from './globeview.js?v=20261123d';
+import { createNoiseGlobe } from './noiseglobe.js?v=20261123b';
 const $ = (id) => document.getElementById(id);
 
 // Classes for the regions: visually distinct, and pleasant to blend between.
@@ -310,6 +348,13 @@ async function main() {
   await Promise.all([...Object.keys(MODELS).map(async (c) => { avail[c] = await fileExists(weightsFile(c)); }),
     fileExists(DATA + 'vae_dec.onnx').then((ok) => { avail.flux2 = ok; })]);
   if (SMALL_DEVICE) avail.m = avail.l = avail.flux2 = false;  // phones and tablets: M, L and the 200 MB FP32 decoder need more memory
+  // The Globe layout needs each model's globe files (class layout, noise directions): next to the page, or in the
+  // folder ?data= names. gv is the globe view (globeview.js), built the first time Globe is chosen; globeOn: showing.
+  const GD = (Q.get('data') || '.').replace(/\/?$/, '/'), gAvail = {};
+  await Promise.all(Object.keys(MODELS).map(async (c) => { gAvail[c] = avail[c] && await fileExists(GD + `imagenet_${c}_noiseaxes.bin`); }));
+  let gv = null, globeOn = false, gvBusy = false, miniOff = false, rateReset = false;
+  let NG = null;  // the noise globe (noiseglobe.js), for every layout; off unless Advanced > Noise turns it on
+  let zg = null;  // the zoom's goal on the flat maps while it glides there: { s, mx, my } (see zoomGoal)
   let first = MODELS[Q.get('m')] && avail[Q.get('m')] ? Q.get('m') : Object.keys(MODELS).find((c) => avail[c]);
   if (!first) throw new Error('The models aren’t available here.');
   await G.setModel(first);
@@ -338,7 +383,7 @@ async function main() {
   // are taken by their neighbours.
   const BLOCKED = ['bikini', 'brassiere', 'maillot', 'maillot tank suit', 'miniskirt', 'swimming trunks', 'diaper'];
   const ATLAS = await fetch('class-square.json').then((r) => (r.ok ? r.json() : null)).catch(() => null);
-  if (!ATLAS) $('cfgnote').textContent = 'The 1,000-class layout didn’t load, so only Endless is available. A content blocker may be blocking class-square.json.';
+  if (!ATLAS) $('cfgnote').textContent = 'The 2D Hilbert layout didn’t load. A content blocker may be blocking class-square.json.';
   const blocked = new Set(BLOCKED.map((n) => G.names.indexOf(n)).filter((k) => k >= 0));
   const AG = ATLAS ? ATLAS.grid : 0;  // the square is AG x AG regions; a cell of -1 is empty
   const atlasCells = ATLAS ? ATLAS.cells.map((c) => (c >= 0 && !blocked.has(c) ? c : -1)) : [];
@@ -354,8 +399,10 @@ async function main() {
     span: clamp(Math.round(+Q.get('span') || 4), 1, 15),                     // Morphing slider (4: variety, and still the transitions)
     region: clamp(Math.round(regionFromURL()), 4, 37),                       // Region size slider, in tiles
     soft: Q.has('soft') ? clamp(+Q.get('soft') || 0, 0, 0.4) : 0.1,           // Class border blend slider (see softClassAt)
-    layout: Q.get('layout') === 'endless' || !ATLAS ? 'endless' : 'all',      // Map layout switch (All classes by default)
+    layout: Q.get('layout') === 'endless' || !ATLAS ? 'endless' : 'all',      // Map layout switch (All classes by default): the flat one, kept while the globe shows
   };
+  // Morphing on the globe: anchors every 1, 2, 4 or 8 tiles (its tiling's coarser levels), its own setting (gspan=)
+  let gspan = 2 ** clamp(Math.round(Math.log2(+Q.get('gspan') || look.span)), 0, 3);
   function regionFromURL() {  // region=<tiles>; older links carry size (0..1, geometric) or density (= 1 - size)
     if (Q.has('region')) return +Q.get('region') || 15;
     const old = Q.has('size') ? +Q.get('size') : Q.has('density') ? 1 - Q.get('density') : NaN;
@@ -437,9 +484,14 @@ async function main() {
   // walk, one image morphing into the next, within a region and across a coastline into the next class. At SPAN 1
   // every tile is an anchor: an independent sample of its spot's classes.
   const anchors = new Map();
+  // classAnchors: for each class, the anchors whose mix holds it (as tkey numbers), kept as anchors are made, so a
+  // noise-globe spin can find that class's tiles without working out any tile's mix. Cleared with the anchors.
+  const classAnchors = new Map(), clearAnchorsOnly = anchors.clear.bind(anchors);
+  anchors.clear = () => { clearAnchorsOnly(); classAnchors.clear(); };
   function anchor(a, b) {
     const k = a + ',' + b; let n = anchors.get(k);
-    if (!n) { if (anchors.size > 200000) anchors.clear(); n = { z: gauss(Z, hash2(a, b, 13)), mix: softClassAt(a * SPAN + 0.5, b * SPAN + 0.5) }; anchors.set(k, n); }
+    if (!n) { if (anchors.size > 200000) anchors.clear(); n = { z: gauss(Z, hash2(a, b, 13)), mix: softClassAt(a * SPAN + 0.5, b * SPAN + 0.5) }; anchors.set(k, n);
+      for (const c in n.mix) { let S = classAnchors.get(+c); if (!S) classAnchors.set(+c, S = new Set()); S.add(tkey(a, b)); } }
     return n;
   }
   // A tile's class weights: bilinear over the four anchors around it (outside All classes they have none, so the rest
@@ -454,15 +506,24 @@ async function main() {
     for (const c in mix) mix[c] /= t;
     return mix;
   }
-  function tileInputs(i, j) {  // -> { z, mix: { class: weight } }
+  function baseZ(i, j, scale) {  // a tile's z from the four anchors around it, on the sphere of typical samples times scale
     const fx = i / SPAN, fy = j / SPAN, a = Math.floor(fx), b = Math.floor(fy), tx = fx - a, ty = fy - b, z = new Float32Array(Z);
     for (const [p, q, w] of [[a, b, (1 - tx) * (1 - ty)], [a + 1, b, tx * (1 - ty)], [a, b + 1, (1 - tx) * ty], [a + 1, b + 1, tx * ty]]) {
       if (w) { const n = anchor(p, q).z; for (let k = 0; k < Z; k++) z[k] += w * n[k]; }
     }
     let s = 0; for (let k = 0; k < Z; k++) s += z[k] * z[k];
-    s = psi * R / Math.sqrt(s); for (let k = 0; k < Z; k++) z[k] *= s;  // on the sphere of typical samples, scaled by psi
-    return { z, mix: classMix(i, j) };
+    s = scale * R / Math.sqrt(s); for (let k = 0; k < Z; k++) z[k] *= s;
+    return z;
   }
+  function tileInputs(i, j) {  // -> { z, mix: { class: weight } }
+    const mix = classMix(i, j);
+    // the noise globe, when on: the tile's noise along its classes' 3 directions is the globe's point for it (it applies psi)
+    if (NG && NG.on) return { z: NG.z(baseZ(i, j, 1), mix, NG.field(fieldPt(i + 0.5, j + 0.5))), mix };
+    return { z: baseZ(i, j, psi), mix };  // scaled by psi
+  }
+  // A tile's place in the noise globe's field: the field varies over the unit sphere, where 1,000 classes sit about
+  // 0.112 apart, so a region (LC tiles) is given that much of it.
+  const fieldPt = (x, y) => [x * 0.112 / LC, y * 0.112 / LC, 0];
   const OFF = 2 ** 24, tkey = (i, j) => (i + OFF) * 2 ** 25 + (j + OFF);  // numeric tile keys, for big sets
   // ---- Endless names (All classes: drawDyn). As in All classes, each name has a fixed point and a fixed zoom from
   // which it shows, worked out from its region alone (lazily, cached), so what shows never depends on panning or on what
@@ -747,7 +808,7 @@ async function main() {
   const MAX_S = 640, minS = () => 1 / dpr;
   // A link can carry the view: x and y in tiles, zoom in CSS px per tile (written by viewToURL as the view settles).
   if (Number.isFinite(+Q.get('x')) && Number.isFinite(+Q.get('y')) && Q.has('x') && Q.has('y')) { view.x = +Q.get('x'); view.y = +Q.get('y'); }
-  if (+Q.get('zoom') > 0) view.s = Math.min(MAX_S, +Q.get('zoom'));  // the lower limit applies on the first frame
+  if (+Q.get('zoom') > 0 && Q.get('layout') !== 'globe') view.s = Math.min(MAX_S, +Q.get('zoom'));  // the lower limit applies on the first frame; a globe link's zoom is the globe's
   let vx = 0, vy = 0;  // fling velocity, tiles per second
 
   // ---- generation ----
@@ -777,7 +838,7 @@ async function main() {
   // minimap (drawn every 250 ms: miniCalls), and the whole frame.
   const prof = BENCH ? { frames: 0, tiles: 0, labels: 0, mini: 0, miniCalls: 0, total: 0 } : null;
   if (prof) window.__prof = prof;
-  const pending = new Set();
+  const pending = new Set(), discard = new Set();  // discard: tiles in flight whose result is stale (see remakeClasses)
   const tierOf = (sd) => (sd <= 22 ? -1 : sd <= 44 ? 0 : sd <= 120 ? 1 : 2);
   // A tier whose store holds fewer tiles than the screen shows would evict tiles in view and make them again forever
   // (a 5K screen; a small device on a big monitor): then a coarser one.
@@ -808,17 +869,22 @@ async function main() {
   // in flight once the minimap stopped stalling the page, and smooth mode made 2.4x fewer tiles during the drag.
   const SMOOTH = Q.get('smooth') === '1';
   let lastWheel = -1e9;
+  // While the view moves (drag, pinch, glide, arrow keys, a zoom under way) only latents are made: each is cheap and
+  // gives the GPU back quickly, so the motion stays smooth; the decodes wait until it stops (move=full: no waiting).
+  const CHEAP_MOVE = Q.get('move') !== 'full'; let motionReady = false;  // motionReady: the input state below exists
+  const inMotion = () => CHEAP_MOVE && motionReady && (viewMoving(performance.now()) || !!zg);
   function moving() { return SMOOTH && (drag || !!pinch || !!(vx || vy) || performance.now() - lastWheel < 300); }
   function pump() {
-    if (paused || held || G.lost || document.hidden) return;  // hidden tab: no work (and none the rates would miss)
-    const mv = moving(); G.smooth = mv;
+    if (globeOn || gvBusy || paused || held || G.lost || document.hidden) return;  // hidden tab: no work (and none the rates would miss); the globe makes its own tiles (gvBusy: it is being built)
+    const mv = moving(), cheap = latFirst && inMotion(); G.smooth = mv;
     // while a path animates and its frames fall short of 30 a second, they go first: one tile (and one latent) at a time
     const slow = animating && pathSlow, slots = slow ? 1 : G.slots, pvSlots = slow ? 1 : G.previewSlots;
     const needPv = latFirst && (farLeft >= 0 ? farZeros > 0 : wantEmpty > 0);  // any wanted tile still to get its latent
     for (let n = 0; n < want.length && (mv ? inflight + inflightP < 1 : inflight < slots || inflightP < pvSlots);) {
       const [, i, j] = want[n], k = i + ',' + j;
       if (pending.has(k) || doneSince.has(k)) { want.splice(n, 1); continue; }  // doneSince: finished since want was collected
-      const pv = latFirst && !tiny.has(k) && !madeAt(i, j);  // nothing made yet: its latent first
+      const pv = latFirst && (convOnly || !tiny.has(k)) && !madeAt(i, j);  // nothing made yet: its latent first (Conv alone: also a latent made for older settings, see remake)
+      if (!pv && cheap) { n++; continue; }  // the view is moving: decodes wait
       if (mv ? inflight + inflightP >= 1 : pv ? inflightP >= pvSlots : inflight >= slots) {
         if (pv || mv || !needPv) break;  // decode slots full and no wanted tile needs a latent: nothing more can start
         n++; continue;
@@ -832,7 +898,7 @@ async function main() {
           fails = 0;
           if (pv) {  // kept unless the tile was decoded meanwhile
             previews++;
-            if (ep === epoch && !(tiny.has(k) && !prevOnly.has(k)) && madeAt(i, j) < 2) {
+            if (ep === epoch && !discard.delete(k) && !(tiny.has(k) && !prevOnly.has(k)) && madeAt(i, j) < 2) {
               storePreview(k, bmp, i, j, r);
               if (latRaw !== raw0) showPreview(k);  // the raw-latents switch came while its bitmap was made
             } else bmp.close();
@@ -840,7 +906,7 @@ async function main() {
           }
           made++;
           if (dec === 'flux2') madeFlux++;
-          if (ep === epoch) { store(k, bmp, i, j); if (dec === 'flux2') refined.add(k); } else bmp.close();  // drop tiles made for old settings
+          if (ep === epoch && !discard.delete(k)) { store(k, bmp, i, j); if (dec === 'flux2') refined.add(k); } else bmp.close();  // drop tiles made for old settings (discard: its class's noise was spun meanwhile)
         })
         .catch(failed)
         .finally(() => { pending.delete(k); doneSince.add(k); if (pv) inflightP--; else inflight--; pump(); });
@@ -858,8 +924,9 @@ async function main() {
     const o = G.options, m = MODELS[G.model];
     document.querySelectorAll('.mbtn').forEach((b) => {
       b.setAttribute('aria-pressed', String(b.dataset.m === G.model));
-      b.disabled = !avail[b.dataset.m] || switching;
-      b.title = avail[b.dataset.m] ? `${MODELS[b.dataset.m].label}, ${MODELS[b.dataset.m].params} params` : `${MODELS[b.dataset.m].label}: not available here`;
+      b.disabled = !avail[b.dataset.m] || switching || (globeOn && !gAvail[b.dataset.m]);
+      b.title = !avail[b.dataset.m] ? `${MODELS[b.dataset.m].label}: not available here` : globeOn && !gAvail[b.dataset.m] ? `${MODELS[b.dataset.m].label}: its globe isn’t available here`
+        : `${MODELS[b.dataset.m].label}, ${MODELS[b.dataset.m].params} params`;
     });
     const on = decoders();
     document.querySelectorAll('.dtog').forEach((b) => {
@@ -873,13 +940,13 @@ async function main() {
     $('gh16').checked = o.gHalf && G.hasF16; $('gh16').disabled = !G.hasF16 || switching;
     const q = new URLSearchParams(location.search);
     q.set('m', G.model); q.set('dec', convOnly ? 'none' : o.decoder); q.set('flux', refineOn ? 1 : 0); q.set('h16', o.half ? 1 : 0); q.set('g16', o.gHalf ? 1 : 0);
-    q.set('span', look.span); q.set('region', look.region); q.set('soft', look.soft); q.set('layout', look.layout); q.set('lat', latFirst ? 1 : 0);
-    if (latRaw) q.set('raw', 1); else q.delete('raw');
-    q.set('n', noiseSeed); q.set('ns', noiseStr);
+    q.set('span', look.span); q.set('gspan', gspan); q.set('region', look.region); q.set('soft', look.soft); q.set('layout', globeOn ? 'globe' : look.layout); q.set('lat', latFirst ? 1 : 0);    if (latRaw) q.set('raw', 1); else q.delete('raw');
+    q.set('n', noiseSeed); q.set('ns', noiseStr); if (NG) NG.writeURL(q);
     if (psi !== 1) q.set('psi', psi); else q.delete('psi'); q.delete('tz');
     $('trunc').value = psi; $('truncv').textContent = psi === 1 ? '1 (as trained)' : psi.toFixed(2);
     if (document.activeElement !== $('nseed')) $('nseed').value = noiseSeed;
     $('nstr').value = noiseStr; $('nstrv').textContent = noiseStr === 1 ? '1 (as trained)' : String(noiseStr);
+    if (NG) { $('ngon').checked = NG.on; $('ngon').disabled = switching || !gAvail[G.model]; }  // NG: not on the first call
     for (const k of ['size', 'density', 'mode', 'fog']) q.delete(k);  // older parameters
     history.replaceState(null, '', `${location.pathname}?${q}`);
   }
@@ -891,26 +958,137 @@ async function main() {
   }
   // The morph length slider's range follows the region size: at most half a region, so it can't skip a class.
   function showLook() {
-    const max = Math.max(1, Math.floor(LC / 2));
-    $('span').max = max; $('span').disabled = max === 1; $('span').value = SPAN;
-    $('spanv').textContent = SPAN === 1 ? 'off' : `${SPAN} tiles`;
-    $('densv').textContent = `${LC} tiles across`; imagenetNote(LC);
+    const max = Math.max(1, Math.floor(LC / 2)), span = globeOn ? gspan : SPAN;
+    // Morphing: on the globe the slider has four stops (1, 2, 4, 8 tiles); on the flat maps, 1 to half a region
+    if (globeOn) { $('span').min = 0; $('span').max = 3; $('span').disabled = false; $('span').value = Math.log2(gspan); }
+    else { $('span').min = 1; $('span').max = max; $('span').disabled = max === 1; $('span').value = SPAN; }
+    $('spanv').textContent = span === 1 ? 'off' : `${span} tiles`;
+    $('densv').textContent = globeOn ? 'set by the model' : `${LC} tiles across`; imagenetNote(globeOn ? 0 : LC);
     $('soft').value = look.soft; $('softv').textContent = softLabel();
-    $('spannote').textContent = look.span > SPAN ? `Morphing is capped at ${max} tiles: half a region at this size.` : '';
-    $('span').title = SPAN === 1 ? 'Every tile is its own sample of its region’s class.' : `An anchor image every ${SPAN} tiles; the tiles between morph from one to the next, across class borders too.`;
+    $('spannote').textContent = !globeOn && look.span > SPAN ? `Morphing is capped at ${max} tiles: half a region at this size.` : '';
+    $('span').title = span === 1 ? 'Every tile is its own sample of its region’s class.' : `An anchor image every ${span} tiles; the tiles between morph from one to the next, across class borders too.`;
     document.querySelectorAll('.lbtn').forEach((b) => {
-      b.setAttribute('aria-pressed', String(b.dataset.l === look.layout));
-      b.disabled = b.dataset.l === 'all' && !ATLAS;
+      const l = b.dataset.l;
+      b.setAttribute('aria-pressed', String(l === (globeOn ? 'globe' : look.layout)));
+      b.disabled = (l === 'all' && !ATLAS) || (l === 'globe' && (!gAvail[G.model] || gvBusy));
+      if (l === 'globe' && !gAvail[G.model]) b.title = `The globe for ${MODELS[G.model] ? MODELS[G.model].label : 'this model'} isn’t available here.`;
     });
+    // What the globe does not have is switched off there, not hidden, so the panel keeps its shape: region size (the
+    // model's class codes place the classes) and the fill orders.
+    $('size').disabled = globeOn; $('fillk').disabled = globeOn;
+    if (globeOn) $('filltxt').textContent = 'Nearest (the globe’s only order)'; else if (gv) $('filltxt').textContent = FILLS[fill][1];  // gv: not on the first call, before FILLS exists
+    $('noiserow').hidden = !(NG && NG.on);
+    $('globenote').hidden = !globeOn;
+    if (globeOn && gv) $('globenote').textContent = `Each class sits where the model’s own class codes put it, so there is no region size. On average ${(10 * gv.n10).toFixed(1)} of each class’s 10 nearest classes in the model are among its 10 nearest here.`;
     showConfig();
   }
   // A layout change: a new map, starting at that layout's home.
+  // The globe keeps its own tiles and its own place, and so does the flat map: switching to the globe and back loses
+  // nothing (the flat map starts afresh only when the flat layout itself changes).
   document.querySelectorAll('.lbtn').forEach((b) => b.onclick = () => {
-    if (b.dataset.l === look.layout || b.disabled) return;
-    look.layout = b.dataset.l; clearPath();
-    if (!switching) { paused = false; fails = 0; $('cfgnote').textContent = ''; animate(); }
-    regenerate(); [view.x, view.y] = home(); vx = vy = 0; showLook();
+    const l = b.dataset.l;
+    if (b.disabled || gvBusy || l === (globeOn ? 'globe' : look.layout)) return;
+    if (l === 'globe') { setGlobe(true); return; }
+    const changed = l !== look.layout; look.layout = l;
+    if (globeOn) setGlobe(false);
+    if (changed) {
+      clearPath();
+      if (!switching) { paused = false; fails = 0; $('cfgnote').textContent = ''; animate(); }
+      regenerate(); [view.x, view.y] = home(); vx = vy = 0;
+    }
+    showLook();
   });
+  // What the globe view reads, live, and what it calls back (globeview.js).
+  const sh = {
+    get psi() { return psi; }, get soft() { return look.soft; }, get span() { return gspan; },
+    get noiseSeed() { return noiseSeed; }, get noiseStr() { return noiseStr; }, get NOISE() { return NOISE; },
+    get held() { return held; }, get paused() { return paused || switching; },
+    get latRaw() { return latRaw; }, get convOnly() { return convOnly; }, get arrows() { return arrows; }, cheapMove: CHEAP_MOVE,
+    get pathSlow() { return animating && pathSlow; },
+  };
+  const noRoomMsg = 'Zoomed in, tiles stay with TAEF2: the full decoder needs about 0.75 GB of GPU memory that does not seem free here.';
+  const globeEnv = () => ({
+    G, Q, $, GD, S100, blocked, sh, NG, fail: failed, ok: () => { fails = 0; }, pen: gpen, overlay: drawGlobePath, spun: flatSpun,  // spun: the noise globe turned on the globe; the flat map's tiles are stale too
+    // the full FLUX.2 decoder over TAEF2, as on the flat maps: only when it is on, fits, and the page is left alone
+    refineOK: () => !(G.lost || fullOff || !refineOn || convOnly || !avail.flux2 || G.options.decoder === 'flux2' || held || paused || switching || animating) && performance.now() - lastInput >= IDLE_MS,  // animating: the path's frames need the GPU
+    refineReady: () => (fits ??= G.fullFits().then((ok) => { if (!ok) throw new Error(noRoomMsg); })).then(() => G.loadFull()),
+    refineFailed: (e) => {
+      fullOff = true;
+      if (e.message === noRoomMsg) $('cfgnote').textContent = noRoomMsg;
+      else { console.error(e); $('cfgnote').textContent = `Refining with the full decoder stopped: ${e.message || e}`; }
+    },
+  });
+  const showMinis = () => {  // the flat maps' minimap or the globe's noise globe, unless M hid it
+    mini.hidden = globeOn || miniOff; NG.setHidden(miniOff);
+  };
+  // ---- the noise globe: one for every layout. The flat maps are its host unless the globe shows. ----
+  NG = createNoiseGlobe({ G, Q, $, GD, sh });
+  let spunAt = 0, spunWait = false;
+  // These classes' noise turned (null: every class's): on the flat maps, only the tiles holding them count as not
+  // decoded and are made again (each stays drawn till then); everything else keeps its image. A tile holds a class if
+  // one of the four anchors round it does. A spin calls this on every pointer event: it runs at most every 120 ms.
+  let spunSet = new Set(), spunAll = false, spunTiles = 0;
+  function remakeClasses(cs) {
+    const sets = cs.map((c) => classAnchors.get(c)).filter(Boolean); spunTiles = 0; if (!sets.length) return;
+    const holds = (i, j) => {
+      const a = Math.floor(i / SPAN), b = Math.floor(j / SPAN), k0 = tkey(a, b), k1 = tkey(a + 1, b), k2 = tkey(a, b + 1), k3 = tkey(a + 1, b + 1);
+      for (const S of sets) if (S.has(k0) || S.has(k1) || S.has(k2) || S.has(k3)) return true;
+      return false;
+    };
+    const mark = (k) => { const [i, j] = k.split(',').map(Number); if (!holds(i, j)) return; prevOnly.add(k); refined.delete(k); spunTiles++; };
+    for (const k of tiny.slot.keys()) mark(k);
+    for (const k of full.keys()) if (!prevOnly.has(k)) mark(k);
+    for (const k of pending) { const [i, j] = k.split(',').map(Number); if (holds(i, j)) discard.add(k); }
+    // ponytail: every tile of every block held (512 x 512 each; a few blocks in normal use, ~1 ms each); per-block lists of made tiles if a much-explored map makes spins slow
+    for (const B of blocks.values()) for (let t = 0; t < B.done.length; t++) {  // Conv alone: its latent is made again; else its decode
+      if (B.done[t] && (convOnly || B.done[t] === 2) && holds(B.a * BLK + t % BLK, B.b * BLK + Math.floor(t / BLK))) B.done[t] = convOnly ? 0 : 1;
+    }
+    G.dropLatents();  // kept for the old noise
+  }
+  function flatSpun(cs) {
+    if (cs) for (const c of cs) spunSet.add(c); else spunAll = true;
+    const go = () => {
+      spunWait = false; if (!spunAll && !spunSet.size) return;  // already done by a call that came first
+      spunAt = performance.now(); if (spunAll) { epoch++; remake(); } else remakeClasses([...spunSet]);
+      spunSet = new Set(); spunAll = false; tNear = 0; tFar = 0;
+    };
+    if (performance.now() - spunAt > 120) go(); else if (!spunWait) { spunWait = true; setTimeout(go, 120); }
+  }
+  const flatHost = {
+    centre() {
+      const i = Math.floor(view.x), j = Math.floor(view.y); if (!tileIn(i, j)) return null;
+      const mix = classMix(i, j); if (!Object.keys(mix).length) return null;
+      return { mix, q: NG.field(fieldPt(view.x, view.y)), id: i + ',' + j, z0: () => baseZ(i, j, 1) };
+    },
+    spun(cs) { flatSpun(cs); if (gv) gv.spun(cs); },  // the globe too: its tiles of these classes are stale when it next shows
+    idle: () => !inflight && !inflightP && !want.length,
+  };
+  NG.attach(flatHost);
+  // On or off: every tile is made again, with or without the noise globe's part of its noise.
+  async function setNoiseGlobe(b) {
+    try { await NG.setOn(b && !!gAvail[G.model]); }
+    catch (e) { console.error(e); $('cfgnote').textContent = `The noise globe couldn’t start: ${e.message || e}`; }
+    epoch++; remake(); if (gv) gv.remake(); showLook();
+  }
+  $('ngon').onchange = () => setNoiseGlobe($('ngon').checked);
+  async function setGlobe(on) {
+    if (on === globeOn || gvBusy) return;
+    if (on) {
+      gvBusy = true; showLook();
+      try {
+        if (!gv) { status('Building the globe…'); await new Promise((r) => setTimeout(r, 30)); gv = await createGlobeView(globeEnv()); gv.settings('all'); }  // settings: any changed while it was built
+        if (gv.model !== G.model) { status('Loading the globe…'); await gv.loadModel(G.model); }
+      } catch (e) { console.error(e); $('cfgnote').textContent = `The globe couldn’t start: ${e.message || e}`; status(''); gvBusy = false; showLook(); pump(); return; }
+      status(''); gvBusy = false;
+      globeOn = true; wrap.classList.add('onglobe'); cv.hidden = true; $('globe').hidden = false; $('labels').hidden = false; showMinis(); gv.show(); swapPath();
+    } else {
+      gv.hide(); globeOn = false; wrap.classList.remove('onglobe'); NG.attach(flatHost); $('globe').hidden = true; $('labels').hidden = true; cv.hidden = false; showMinis();
+      swapPath();
+      tNear = 0; tFar = 0; lastView = '';  // the link takes the flat view again (its zoom was the globe's)
+      pump();
+    }
+    rateReset = true; showLook();
+  }
   // A model, decoder or precision change: stop starting tiles, let the lab switch (it waits for the tiles in flight),
   // then make the map again with the new settings.
   let switching = false;
@@ -923,13 +1101,16 @@ async function main() {
     try { await change(); }
     catch (e) { $('cfgnote').textContent = `Couldn’t switch: ${e.message || e}`; status(''); }
     NOISE = makeNoise();
-    fails = 0; remake(keepFull); switching = false; paused = false; showConfig(); markSaved(); animate();  // the path animation resumes too
+    fails = 0; remake(keepFull); if (gv) gv.remake(keepFull); switching = false; paused = false; showLook(); markSaved(); animate();  // the path animation resumes too
   }
   // keepFull: tiles already at full quality (FLUX.2) stay as they are; only the rest are made again.
   function remake(keepFull = false) {  // every decoded tile counts as not decoded yet (as a latent preview does), and stays drawn till then
     for (const k of tiny.slot.keys()) prevOnly.add(k);
     for (const k of full.keys()) prevOnly.add(k);
     for (const B of blocks.values()) for (let t = 0; t < B.done.length; t++) if (B.done[t] === 2) B.done[t] = 1;
+    // Conv alone: a latent is all a tile gets, so each counts as not made and is previewed again with the new settings
+    // (it stays drawn till then). Otherwise the decode that follows replaces it.
+    if (convOnly) for (const B of blocks.values()) B.done.fill(0);
     if (!keepFull) refined.clear();  // refined with the old settings: refined again after the TAEF2 remake
     else for (const k of refined) {  // still right: undo their marking above
       prevOnly.delete(k);
@@ -937,13 +1118,20 @@ async function main() {
     }
     G.dropLatents();  // kept for the old settings
   }
-  document.querySelectorAll('.mbtn').forEach((b) => b.onclick = () => { if (b.dataset.m !== G.model) configure(() => G.setModel(b.dataset.m)); });
+  // A new model on the globe also loads that model's globe (its classes sit elsewhere); hidden, the globe loads it when next shown.
+  document.querySelectorAll('.mbtn').forEach((b) => b.onclick = () => {
+    const m = b.dataset.m;
+    if (m !== G.model) configure(async () => {
+      await G.setModel(m); if (globeOn) await gv.loadModel(m);
+      if (NG.on) await NG.setOn(!!gAvail[m]);  // the new model's noise directions, or off where it has none here
+    });
+  });
   function decoders() { return { conv: !latRaw, taef2: !convOnly && G.options.decoder === 'taef2', flux2: !convOnly && (G.options.decoder === 'flux2' || refineOn) }; }
   // A toggle: Conv switches latents first; TAEF2 and FLUX.2 pick the lab's decoder (TAEF2 if on, else FLUX.2), FLUX.2
   // also refining over TAEF2; with both off only Conv runs. Tiles already made stay; the rest follow the new setting.
   document.querySelectorAll('.dtog').forEach((b) => b.onclick = () => {
     const on = decoders(); on[b.dataset.d] = !on[b.dataset.d];
-    if (on.conv === latRaw) recolour(!on.conv);  // Conv on or off: the latents shown so far in the other colouring
+    if (on.conv === latRaw) { recolour(!on.conv); if (gv) gv.repreview(); }  // Conv on or off: the latents shown so far in the other colouring
     latFirst = !!G.preview; convOnly = latFirst && !on.taef2 && !on.flux2; refineOn = on.flux2;
     const dec = on.taef2 ? 'taef2' : on.flux2 ? 'flux2' : G.options.decoder;
     if (dec !== G.options.decoder) configure(() => G.setOptions({ decoder: dec }), true); else { showConfig(); pump(); }
@@ -993,30 +1181,39 @@ async function main() {
   };
   // While a slider moves, only its label changes; the field itself changes in regenerate(), together with the epoch,
   // so no tile is ever made from a mix of old and new settings.
-  $('span').addEventListener('input', () => { look.span = +$('span').value; $('spanv').textContent = look.span === 1 ? 'off' : `${look.span} tiles`; onLook(); });
+  let gspanTimer = 0;
+  $('span').addEventListener('input', () => {
+    if (globeOn) {  // the globe keeps its tiles on screen and makes them again with the new anchors
+      gspan = 2 ** +$('span').value; $('spanv').textContent = gspan === 1 ? 'off' : `${gspan} tiles`;
+      clearTimeout(gspanTimer); gspanTimer = setTimeout(() => { gv.settings('span'); showLook(); }, 150);
+      return;
+    }
+    look.span = +$('span').value; $('spanv').textContent = look.span === 1 ? 'off' : `${look.span} tiles`; onLook();
+  });
   $('size').addEventListener('input', () => { look.region = +$('size').value; clearPath(); $('densv').textContent = `${look.region} tiles across`; imagenetNote(look.region); onLook(); });
   // At 37 tiles (37 x 37 = 1,369 per class, 1.4 M in the square) the map holds about as many images as ImageNet's
   // training set (1.28 M, 732 to 1,300 per class): said under the slider, at 37 only.
   function imagenetNote(n) { $('sizenote').hidden = n !== 37; }
   // Class border blend: the regions stay as they are, so the map is kept: every tile stays on screen and is made again with
   // the new blend (as for a new model).
-  function softLabel() { return look.soft ? `${(look.soft * look.region).toFixed(1)} tiles each side` : 'off'; }
+  function softLabel() { return !look.soft ? 'off' : globeOn ? `${Math.round(100 * look.soft)}% each side` : `${(look.soft * look.region).toFixed(1)} tiles each side`; }
   let softTimer = 0;
   $('soft').addEventListener('input', () => {
     look.soft = +$('soft').value; $('softv').textContent = softLabel();
     clearTimeout(softTimer);
-    softTimer = setTimeout(() => { epoch++; anchors.clear(); remake(); showLook(); }, 150);
+    softTimer = setTimeout(() => { epoch++; anchors.clear(); remake(); if (gv) gv.settings('soft'); showLook(); }, 150);
   });
   // Noise: a new seed or strength keeps the map, as a new model does: every tile stays on screen and is made again.
   let truncTimer = 0;
   $('trunc').oninput = () => {
     psi = +$('trunc').value; showConfig();
-    clearTimeout(truncTimer); truncTimer = setTimeout(() => { epoch++; anchors.clear(); remake(); showLook(); }, 150);
+    clearTimeout(truncTimer); truncTimer = setTimeout(() => { epoch++; anchors.clear(); remake(); if (gv) gv.remake(); showLook(); }, 150);
   };
   function setNoise(seed, str) {
     seed = clamp(Math.floor(seed) || 0, 0, 999999);
     if (seed === noiseSeed && str === noiseStr) return;
-    noiseSeed = seed; noiseStr = str; NOISE = makeNoise(); epoch++; remake(); showConfig();
+    const newSeed = seed !== noiseSeed;
+    noiseSeed = seed; noiseStr = str; NOISE = makeNoise(); if (newSeed) NG.seed(); epoch++; remake(); if (gv) gv.settings(newSeed ? 'seed' : ''); showConfig();
   }
   $('nseed').addEventListener('change', () => { setNoise(+$('nseed').value, noiseStr); $('nseed').value = noiseSeed; });  // shows what was applied
   $('nprev').onclick = () => setNoise(noiseSeed - 1, noiseStr);
@@ -1127,7 +1324,7 @@ async function main() {
   mini.addEventListener('pointerdown', (e) => { mini.setPointerCapture(e.pointerId); miniDrag = miniFrame(); miniMove(e); });
   mini.addEventListener('pointermove', (e) => { if (miniDrag) miniMove(e); });
   for (const ev of ['pointerup', 'pointercancel']) mini.addEventListener(ev, () => { miniDrag = null; });
-  const toggleMini = () => { mini.hidden = !mini.hidden; drawMini(); };
+  const toggleMini = () => { miniOff = !miniOff; showMinis(); drawMini(); };  // M: the minimap, or on the globe the noise globe
 
   // Pause: no new tiles start (those in flight finish); the view still pans and zooms over what is stored.
   const setHeld = (h) => { held = h; $('pause').setAttribute('aria-pressed', String(h)); if (!h) { pump(); animate(); } };  // the pressed P shows the state; the row's text stays put
@@ -1148,7 +1345,7 @@ async function main() {
   const doneSince = new Set();  // tiles finished since then (far out: since farWant)
   let tPrev = performance.now(), rateWin = { t: tPrev, made: 0, busy: 0, previews: 0, busyP: 0, gen: 0, busyAny: 0 }, rate = 0, rateP = 0, rateG = 0, busyP = 0, busyAny = 0;
   // The view goes into the link once it settles (no drag or fling), at most twice a second, so a copied link opens here.
-  const showZoom = () => { const z = 100 * view.s / S100, s = z < 1 ? '<1%' : `${z < 10 ? z.toFixed(1) : Math.round(z)}%`; if ($('zpct').textContent !== s) $('zpct').textContent = s; };
+  const showZoom = () => { const z = globeOn ? gv.zoomPct() : 100 * view.s / S100, s = z < 1 ? '<1%' : `${z < 10 ? z.toFixed(1) : Math.round(z)}%`; if ($('zpct').textContent !== s) $('zpct').textContent = s; };
   let tView = 0, lastView = '';
   function viewToURL(now) {
     if (now - tView < 500 || drag || Math.hypot(vx, vy) > 0.05) return;
@@ -1472,10 +1669,80 @@ async function main() {
     }
     ctx.globalAlpha = 1; ctx.letterSpacing = '0px';
   }
+  // The rates and the readout, for whichever view shows: the flat map's counters, or the globe's (the same ones, kept
+  // the same way). Every 250 ms it also writes the view into the link and redraws the flat minimap.
+  let lastGlobeURL = '', lastNoiseURL = '', tGlobeURL = 0, tNoiseURL = 0;
+  function noiseToURL() {  // the noise globe's spins, into the link, at most once a second
+    const now = performance.now(); if (now - tNoiseURL < 1000) return; tNoiseURL = now;
+    const q = new URLSearchParams(location.search); NG.writeURL(q);
+    const u = q.toString(); if (u === lastNoiseURL) return;
+    lastNoiseURL = u; try { history.replaceState(null, '', `${location.pathname}?${q}`); } catch (e) { /* as above */ }
+  }
+  function globeToURL() {  // at most once a second (some browsers allow only 100 link updates in 30 s)
+    const now = performance.now(); if (now - tGlobeURL < 1000) return; tGlobeURL = now;
+    const q = new URLSearchParams(location.search); gv.writeURL(q); q.delete('x'); q.delete('y');
+    const u = q.toString(); if (u === lastGlobeURL) return;
+    lastGlobeURL = u; try { history.replaceState(null, '', `${location.pathname}?${q}`); } catch (e) { /* too many link updates for this browser: the next one will do */ }
+  }
+  function hud(now) {
+    const C = globeOn ? gv.counters() : { made, madeFlux, previews, busy, busyP, busyAny, refinedN, refining, viewTotal,
+      left: farLeft >= 0 ? farLeft : want.length + pending.size, leftP: latFirst ? (farLeft >= 0 ? farZeros : wantEmpty) : 0 };
+    const win = () => ({ t: now, made: C.made, busy: C.busy, previews: C.previews, busyP: C.busyP, gen: G.generated - pathGen - NG.gen, busyAny: C.busyAny });
+    if (rateReset) { rateReset = false; rate = rateP = rateG = 0; rateWin = win(); }  // another view's counters: measured afresh
+    // Tiles per second of GPU time over the last second of work: decoded tiles while any decode is in flight, latent
+    // previews while only previews are.
+    if (now - rateWin.t > 1000) {
+      const db = C.busy - rateWin.busy, dp = C.busyP - rateWin.busyP;
+      if (db > 0.2) rate = (C.made - rateWin.made) / db;
+      if (dp > 0.2) rateP = (C.previews - rateWin.previews) / dp;
+      const da = C.busyAny - rateWin.busyAny;
+      if (da > 0.2) rateG = (G.generated - pathGen - NG.gen - rateWin.gen) / da;  // busyAny is tile work only, so path frames are left out
+      rateWin = win();
+    }
+    if (!globeOn && miniJob.key && now - tHud <= 250) drawMini();  // its background under construction: a slice every frame
+    if (now - tHud > 250) {
+      tHud = now; if (globeOn) globeToURL(); else viewToURL(now); showZoom(); const pm = performance.now(); if (!globeOn) drawMini(); if (prof) { prof.mini += performance.now() - pm; prof.miniCalls++; }
+      // Three parts. This view: its tiles and how many are not decoded yet (or paused / complete). Made: decoded tiles,
+      // and latents when they come first, each with its rate. Time to finish this view, a row per method, fastest first:
+      // each other method makes every tile not yet decoded at its compute per image. Ours with latents first is two rows,
+      // the latents still to make "+" then the decodes (each a full tile: the generator runs again, as latents are not
+      // kept); both sort by their sum, latents just above decodes.
+      const left = C.left, leftP = C.leftP;
+      const tf = OURS_TF[G.model], filling = !held && left && (rate || (leftP && rateP));
+      const t = (n, r) => (n && !r ? Infinity : n / r || 0);  // seconds, Infinity while the rate is not measured yet
+      // Short numbers, so a fast GPU never widens the readout: k and M past a thousand (rates) or ten thousand (counts).
+      const kM = (n, from) => (n < from ? fmt(n) : n < 999.5e3 ? `${(n / 1e3).toFixed(n < 9950 ? 1 : 0)}k` : `${(n / 1e6).toFixed(n < 1e7 ? 1 : 0)}M`);
+      const ps = (r) => (r ? `${kM(r, 1e3)}/s` : ''), cn = (n) => kM(n, 1e4);
+      const ours = G.model ? `R3GAN2-${MODELS[G.model].size}` : 'R3GAN2';  // no model: a switch failed
+      const fluxDec = G.options.decoder === 'flux2';
+      let html = `<div class="head">This view: ${fmt(C.viewTotal)} tiles · ${held ? 'paused' : left ? `${fmt(left)} to go` : 'complete'}</div>`;
+      // Conv shows its own rate, timed alone (lab.js convRate): its count rides on the generator, its cost does not.
+      html += `<table><tr class="gen"><td>Generated</td><td>${cn(G.generated - pathGen - NG.gen)}</td><td>${ps(rateG)}</td></tr>` + (latFirst && !latRaw ? `<tr><td>Decoded (Conv)</td><td>${cn(C.previews)}</td><td>${ps(G.convRate)}</td></tr>` : '')  /* raw latents: Generated says it */  // in the order they happen
+        // Each decoder its own count (a switch keeps what the other made); the rate on the one in use, or 'refining'.
+        + (!fluxDec || C.made > C.madeFlux ? `<tr><td>Decoded (TAEF2)</td><td>${cn(C.made - C.madeFlux)}</td><td>${fluxDec ? '' : ps(rate)}</td></tr>` : '')
+        + (fluxDec || C.madeFlux || C.refinedN || C.refining ? `<tr><td>Decoded (FLUX.2)</td><td>${cn(C.madeFlux + C.refinedN)}</td><td>${fluxDec ? ps(rate) : C.refining ? 'refining' : ''}</td></tr>` : '') + '</table>';
+      if (filling) {
+        // [name, seconds shown, compute per image relative to ours, sort key]: by time, by compute where unmeasured
+        const total = t(leftP, rateP) + t(left, rate), rows = [[latFirst ? `${ours} (${G.options.decoder === 'flux2' ? 'FLUX.2' : 'TAEF2'})` : ours, t(left, rate), 1, total]];
+        if (leftP && !latRaw) rows.push([`${ours} (Conv)`, t(leftP, G.convRate), 0, total]);
+        if (left && rateG) rows.push([`${ours} generator only`, t(left, rateG), 1, -1]);  // the generator's share alone: listed first
+        if (tf) for (const [n, tt] of OTHERS) { const s = t(left, rate) * tt / tf; rows.push([n, s, tt / tf, s]); }
+        rows.sort((a, b) => (a[3] - b[3]) || (a[2] - b[2]));
+        html += `<div class="cap">Time to finish this view</div><table>${rows.map(([n, s, x]) => `<tr${x <= 1 ? ' class="ours"' : ''}><td>${n}</td><td>${Number.isFinite(s) ? (s < 1 ? dur(s) : `~${dur(s)}`) : '…'}</td><td class="plus"${x === 0 ? ' title="Adds to the time below: the Conv previews come first"' : ''}>${x === 0 ? '+' : ''}</td></tr>`).join('')}</table>`;
+      }
+      html += NG.lineHTML();  // the noise globe, when on: the centre class and what its 3 directions carry
+      const code = NG.code(); if ($('ngcode').textContent !== code) { $('ngcode').textContent = code; $('ngcode').hidden = !code; }
+      noiseToURL(); window.__noise = NG.state();
+      window.__path = { n: path.points.length, loop: !!path.loop, drawing: path.drawing, s: head.s, pen: !!pen, scrub: scrub !== null, view: [view.x, view.y, view.s], dot: (() => { const D = dotAt(performance.now()), q = D && pathScreen(D); return q ? [q[0], q[1]] : null; })(), dotShown: pathDot ? dotShown : '', arrow: pathDot && dotShown === 'arrow' ? arrowAt : null };  // for the tests
+      if (html !== hudHTML) $('stats').innerHTML = hudHTML = html;
+      window.__v2 = { layout: globeOn ? 'globe' : look.layout, zoomPct: globeOn ? gv.zoomPct() : 100 * view.s / S100, held, viewTotal: C.viewTotal, left, made: C.made, previews: C.previews, epoch, spunTiles, tiles: tiny.slot.size };
+    }
+  }
   function frame(now) {
     // dt: for motion, capped so a slow frame does not jump; the busy times (for the rates) take the real elapsed time, up
     // to a second (longer means the tab was in the background, not working).
     const real = Math.min(1, (now - tPrev) / 1000), dt = Math.min(0.1, real); tPrev = now; frameNo++;
+    if (globeOn) { hud(now); requestAnimationFrame(frame); return; }  // the globe draws itself (globeview.js); the readout stays this page's
     // Each stage's clock runs while it has work in flight (they overlap on the GPU); Generated's while either does.
     if (inflight > 0) busy += real;
     if (inflightP > 0) busyP += real;
@@ -1486,6 +1753,10 @@ async function main() {
     if (!drag && (vx || vy)) {  // fling
       view.x += vx * dt; view.y += vy * dt; const f = Math.exp(-dt * 4); vx *= f; vy *= f;
       if (Math.hypot(vx, vy) * view.s < 4) vx = vy = 0;
+    }
+    if (zg) {  // a wheel notch or a zoom button: the zoom glides to its goal (time constant 0.1 s), about the point it was aimed at
+      const r = zg.s / view.s, f = Math.abs(r - 1) < 1e-3 ? r : r ** (1 - Math.exp(-real / 0.1));
+      zoomAt(zg.mx, zg.my, f); lastWheel = now; penZoomed(); if (f === r) zg = null;
     }
     pathMotion(dt);  // arrow keys, and edge scrolling while drawing
     if (look.layout === 'all') {  // the view's centre stays on the square, so a fling can't lose it in the dark
@@ -1535,7 +1806,7 @@ async function main() {
         if (!drawn) drawn = tiny.draw(ctx, k, x0, y0, w, h);
         if (!drawn && full.has(k)) { ctx.drawImage(full.get(k), x0, y0, w, h); drawn = true; }
         if (collect && !has(k, tier)) {
-          const r = fillKey(i, j), empty = latFirst ? !tiny.has(k) && !madeAt(i, j) : !drawn;
+          const r = fillKey(i, j), empty = latFirst ? (convOnly || !tiny.has(k)) && !madeAt(i, j) : !drawn;
           if (BENCH) { if (empty) emptyN++; if (Math.hypot(i + 0.5 - view.x, j + 0.5 - view.y) < 0.25 * halfDiag) centreLeft++; }
           // Latents first: a tile with nothing gets its latent at its distance r, a decode only once the latents have
           // reached r + lead. Otherwise: empty tiles first, then sharper versions. Nearest first within each.
@@ -1562,49 +1833,7 @@ async function main() {
     if (prof) prof.labels += performance.now() - pl;
     drawPath(sd);
 
-    // Tiles per second of GPU time over the last second of work: decoded tiles while any decode is in flight, latent
-    // previews while only previews are.
-    if (now - rateWin.t > 1000) {
-      const db = busy - rateWin.busy, dp = busyP - rateWin.busyP;
-      if (db > 0.2) rate = (made - rateWin.made) / db;
-      if (dp > 0.2) rateP = (previews - rateWin.previews) / dp;
-      const da = busyAny - rateWin.busyAny;
-      if (da > 0.2) rateG = (G.generated - pathGen - rateWin.gen) / da;  // busyAny is tile work only, so path frames are left out
-      rateWin = { t: now, made, busy, previews, busyP, gen: G.generated - pathGen, busyAny };
-    }
-    if (miniJob.key && now - tHud <= 250) drawMini();  // its background under construction: a slice every frame
-    if (now - tHud > 250) {
-      tHud = now; viewToURL(now); showZoom(); const pm = performance.now(); drawMini(); if (prof) { prof.mini += performance.now() - pm; prof.miniCalls++; }
-      // Three parts. This view: its tiles and how many are not decoded yet (or paused / complete). Made: decoded tiles,
-      // and latents when they come first, each with its rate. Time to finish this view, a row per method, fastest first:
-      // each other method makes every tile not yet decoded at its compute per image. Ours with latents first is two rows,
-      // the latents still to make "+" then the decodes (each a full tile: the generator runs again, as latents are not
-      // kept); both sort by their sum, latents just above decodes.
-      const left = farLeft >= 0 ? farLeft : want.length + pending.size, leftP = latFirst ? (farLeft >= 0 ? farZeros : wantEmpty) : 0;
-      const tf = OURS_TF[G.model], filling = !held && left && (rate || (leftP && rateP));
-      const t = (n, r) => (n && !r ? Infinity : n / r || 0);  // seconds, Infinity while the rate is not measured yet
-      // Short numbers, so a fast GPU never widens the readout: k and M past a thousand (rates) or ten thousand (counts).
-      const kM = (n, from) => (n < from ? fmt(n) : n < 999.5e3 ? `${(n / 1e3).toFixed(n < 9950 ? 1 : 0)}k` : `${(n / 1e6).toFixed(n < 1e7 ? 1 : 0)}M`);
-      const ps = (r) => (r ? `${kM(r, 1e3)}/s` : ''), cn = (n) => kM(n, 1e4);
-      const ours = G.model ? `R3GAN2-${MODELS[G.model].size}` : 'R3GAN2';  // no model: a switch failed
-      const fluxDec = G.options.decoder === 'flux2';
-      let html = `<div class="head">This view: ${fmt(viewTotal)} tiles · ${held ? 'paused' : left ? `${fmt(left)} to go` : 'complete'}</div>`;
-      // Conv shows its own rate, timed alone (lab.js convRate): its count rides on the generator, its cost does not.
-      html += `<table><tr class="gen"><td>Generated</td><td>${cn(G.generated - pathGen)}</td><td>${ps(rateG)}</td></tr>` + (latFirst && !latRaw ? `<tr><td>Decoded (Conv)</td><td>${cn(previews)}</td><td>${ps(G.convRate)}</td></tr>` : '')  /* raw latents: Generated says it */  // in the order they happen
-        // Each decoder its own count (a switch keeps what the other made); the rate on the one in use, or 'refining'.
-        + (!fluxDec || made > madeFlux ? `<tr><td>Decoded (TAEF2)</td><td>${cn(made - madeFlux)}</td><td>${fluxDec ? '' : ps(rate)}</td></tr>` : '')
-        + (fluxDec || madeFlux || refinedN || refining ? `<tr><td>Decoded (FLUX.2)</td><td>${cn(madeFlux + refinedN)}</td><td>${fluxDec ? ps(rate) : refining ? 'refining' : ''}</td></tr>` : '') + '</table>';
-      if (filling) {
-        // [name, seconds shown, compute per image relative to ours, sort key]: by time, by compute where unmeasured
-        const total = t(leftP, rateP) + t(left, rate), rows = [[latFirst ? `${ours} (${G.options.decoder === 'flux2' ? 'FLUX.2' : 'TAEF2'})` : ours, t(left, rate), 1, total]];
-        if (leftP && !latRaw) rows.push([`${ours} (Conv)`, t(leftP, G.convRate), 0, total]);
-        if (left && rateG) rows.push([`${ours} generator only`, t(left, rateG), 1, -1]);  // the generator's share alone: listed first
-        if (tf) for (const [n, tt] of OTHERS) { const s = t(left, rate) * tt / tf; rows.push([n, s, tt / tf, s]); }
-        rows.sort((a, b) => (a[3] - b[3]) || (a[2] - b[2]));
-        html += `<div class="cap">Time to finish this view</div><table>${rows.map(([n, s, x]) => `<tr${x <= 1 ? ' class="ours"' : ''}><td>${n}</td><td>${Number.isFinite(s) ? (s < 1 ? dur(s) : `~${dur(s)}`) : '…'}</td><td class="plus"${x === 0 ? ' title="Adds to the time below: the Conv previews come first"' : ''}>${x === 0 ? '+' : ''}</td></tr>`).join('')}</table>`;
-      }
-      if (html !== hudHTML) $('stats').innerHTML = hudHTML = html;
-    }
+    hud(now);
     if (prof) { prof.total += performance.now() - pt; prof.frames++; }
     requestAnimationFrame(frame);
   }
@@ -1622,13 +1851,44 @@ async function main() {
   // rates start a fresh window (else they would show far too fast); then filling resumes.
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) return;
-    tPrev = performance.now(); rateWin = { t: tPrev, made, busy, previews, busyP, gen: G.generated - pathGen, busyAny }; pump();
+    tPrev = performance.now(); pump();
+    if (globeOn) rateReset = true; else rateWin = { t: tPrev, made, busy, previews, busyP, gen: G.generated - pathGen - NG.gen, busyAny };  // the globe's counters are its own
   });
-  const path = new Path({ step: 0.05 }), arrows = new Set();
+  let path = new Path({ step: 0.05 }); const arrows = new Set();
+  // Each layout has its own path: the flat maps' in their world (tiles), the globe's in a flat chart round the point
+  // where it began (chart: that point and two directions; distances from it are true, in tiles). The one not showing
+  // waits in otherPath, paused, and is back when its layout is (swapPath).
+  let otherPath = { path: new Path({ step: 0.05 }), head: null, pathDot: null }, chart = null;
+  const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  function newChart(o) {
+    const a = Math.abs(o[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0], d = dot3(a, o), t = a.map((x, i) => x - d * o[i]), n = Math.hypot(...t), e1 = t.map((x) => x / n);
+    chart = { o, e1, e2: [o[1] * e1[2] - o[2] * e1[1], o[2] * e1[0] - o[0] * e1[2], o[0] * e1[1] - o[1] * e1[0]] };
+  }
+  function toChart(p) {  // a point of the globe -> the path's coordinates
+    const c = Math.max(-1, Math.min(1, dot3(chart.o, p))), t = p.map((x, i) => x - c * chart.o[i]), n = Math.hypot(...t);
+    if (n < 1e-9) return { x: 0, y: 0 };
+    const r = Math.acos(c) / gv.tileAngle / n; return { x: r * dot3(t, chart.e1), y: r * dot3(t, chart.e2) };
+  }
+  function fromChart(q) {
+    const r = Math.hypot(q.x, q.y); if (r < 1e-12) return chart.o;
+    const a = r * gv.tileAngle, ca = Math.cos(a), sa = Math.sin(a) / r;
+    return [0, 1, 2].map((i) => ca * chart.o[i] + sa * (q.x * chart.e1[i] + q.y * chart.e2[i]));
+  }
+  // A path point's inputs (a frame of the animation), and where it shows (CSS px in the canvas; null: behind the globe)
+  const pathInputs = (p) => (globeOn ? gv.inputsAt(fromChart(p)) : tileInputs(p.x - 0.5, p.y - 0.5));  // tile i spans [i, i+1]
+  const pathScreen = (p) => { if (!globeOn) return [(p.x - view.x) * view.s + cssW / 2, (p.y - view.y) * view.s + cssH / 2]; const q = gv.project(fromChart(p)); return q[2] > 0 ? q : null; };
+  const globeWorld = (px, py) => { const p = gv.pick(px, py); return p && chart ? toChart(p) : null; };
+  function swapPath() {
+    if (pen) endPen(); scrub = null;
+    const cur = { path, head, pathDot }; ({ path, head, pathDot } = otherPath); otherPath = cur;
+    head ||= new Playhead(path); dotA = null; segKey = '';
+    win.hidden = !path.points.length; pcx.clearRect(0, 0, 256, 256);
+    if (!win.hidden) { placeWin(); animate(); }
+  }
   const ARROWS = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
   const toWorld = (px, py) => [view.x + (px - cssW / 2) / view.s, view.y + (py - cssH / 2) / view.s];
   function setDraw(on) {
-    drawMode = on; $('draw').setAttribute('aria-pressed', String(on)); cv.classList.toggle('pen', on);
+    drawMode = on; $('draw').setAttribute('aria-pressed', String(on)); cv.classList.toggle('pen', on); $('globe').classList.toggle('pen', on);
     if (!on && pen) { endPen(); }
   }
   function endPen() { if (pen.on) path.penUp(); ptrs.delete(pen.id); pen = null; }
@@ -1652,10 +1912,10 @@ async function main() {
   // another class counts as 1 radian). Cached per path and per map settings (truncation, noise etc. change z).
   const segD = new Map(); let segKey = '';
   function segDist(k) {
-    const key = `${path.epoch}|${epoch}`; if (key !== segKey) { segD.clear(); segKey = key; }
+    const key = `${path.epoch}|${epoch}|${globeOn ? gv.epoch : ''}`; if (key !== segKey) { segD.clear(); segKey = key; }
     let d = segD.get(k); if (d !== undefined) return d;
     const a = path.point(k), b = path.point(k + 1); if (!a || !b) return 1e-6;
-    const A = tileInputs(a.x - 0.5, a.y - 0.5), B = tileInputs(b.x - 0.5, b.y - 0.5);
+    const A = pathInputs(a), B = pathInputs(b);
     let dot = 0, na = 0, nb = 0; for (let i = 0; i < Z; i++) { dot += A.z[i] * B.z[i]; na += A.z[i] * A.z[i]; nb += B.z[i] * B.z[i]; }
     let tv = 0; for (const c of new Set([...Object.keys(A.mix), ...Object.keys(B.mix)])) tv += Math.abs((A.mix[c] || 0) - (B.mix[c] || 0));
     d = Math.max(1e-6, Math.acos(Math.max(-1, Math.min(1, dot / (Math.sqrt(na * nb) || 1)))) + tv / 2);
@@ -1678,7 +1938,7 @@ async function main() {
         const h = head, ep = path.epoch, k = Math.max(path.base, Math.min(path.tip - 1, Math.floor(h.s)));
         const p = scrub !== null ? h.at() : h.advance(Math.min(400, +$('pathspeed').value * dt / segDist(k)));  // scrubbing: where the dot is; else this frame's latent distance, in path points here
         if (lastP && p.x === lastP.x && p.y === lastP.y) { await new Promise((r) => requestAnimationFrame(r)); continue; }  // still: nothing new to make
-        const { z, mix } = tileInputs(p.x - 0.5, p.y - 0.5);  // tile i spans [i, i+1]
+        const { z, mix } = pathInputs(p);
         const img = await G.generate(z, Float32Array.from(G.classVec(mix)), NOISE, 'taef2');  // TAEF2 always, as the map's own decoder may be FLUX.2
         pathGen++;
         if (h !== head || ep !== path.epoch || !path.points.length) { lastP = null; continue; }  // cleared or restarted meanwhile
@@ -1736,49 +1996,72 @@ async function main() {
   // The path over the map: a white line with a dark edge (readable on any tile), dashed over bridges, thicker round
   // a loop; when an endless path nears its cap, its oldest tenth fades in. Then the dot, or an arrow at the edge
   // pointing to it when it is off screen.
-  let accent = '';
-  function drawPath(sd) {
+  let accent = '', dotShown = '', arrowAt = null;  // arrowAt: where the arrow was last drawn (CSS px), for the tests  // dotShown: how the dot was last drawn ('dot', or 'arrow' when off screen or round the back)
+  const scrOut = [0, 0, true];
+  // The overlays over the map (readout, path window, minimap, noise globe, panel, credit) as boxes in the map area's
+  // CSS px, read at most twice a second: the arrow to an off-screen dot keeps clear of them.
+  let ovBoxes = [], ovAt = -1e9;
+  function overlayBoxes() {
+    const now = performance.now(); if (now - ovAt < 500) return ovBoxes;
+    ovAt = now; ovBoxes = []; const w = wrap.getBoundingClientRect();
+    for (const id of ['stats', 'pathwin', 'mini', 'gmini', 'minicap', 'rail', 'railtab', 'credit']) {
+      const e = $(id); if (!e.offsetWidth) continue;
+      const r = e.getBoundingClientRect(); ovBoxes.push([r.left - w.left, r.top - w.top, r.right - w.left, r.bottom - w.top]);
+    }
+    return ovBoxes;
+  }
+  // scr(p, o): where path point p shows on the canvas, written into o: [x, y, in front]. limb: the globe's radius on
+  // the canvas (0 on the flat maps), for the arrow to a dot round the back.
+  function drawPathOn(g2, k, W2, H2, scr, limb) {
     const P = path.points, n = P.length;
     if (n < 2 && !pathDot) return;
     accent ||= getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#C00404';
-    const X = (p) => (p.x - view.x) * sd + W / 2, Y = (p) => (p.y - view.y) * sd + H / 2;
-    const fadeN = n > 0.8 * path.maxPoints ? Math.floor(0.1 * path.maxPoints) : 0, L = path.loop;
+    const fadeN = n > 0.8 * path.maxPoints ? Math.floor(0.1 * path.maxPoints) : 0, L = path.loop, o = scrOut;
     // a segment's style as one number (no allocation per point per frame): bridge | in loop << 1 | fade (0-8) << 2
-    const style = (k) => (P[k].bridge ? 1 : 0) | (L && path.base + k >= L.a && path.base + k <= L.b ? 2 : 0) | ((k < fadeN ? Math.min(7, Math.floor(8 * k / fadeN)) : 8) << 2);
-    ctx.save(); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-    for (let k = 1, a = 0; k < n; k++) {  // segment k joins points k-1 and k; consecutive segments of one style, one stroke
-      const s = style(k); if (k + 1 < n && style(k + 1) === s) continue;
-      const bridge = s & 1, inLoop = s & 2, fade = s >> 2, wid = (inLoop ? 4.5 : 3) * dpr;
-      ctx.globalAlpha = fade / 8; ctx.setLineDash(bridge ? [6 * dpr, 6 * dpr] : []);
-      ctx.beginPath(); ctx.moveTo(X(P[a]), Y(P[a]));
-      for (let q = a + 1; q <= k; q++) ctx.lineTo(X(P[q]), Y(P[q]));
-      ctx.strokeStyle = 'rgba(20,20,20,0.85)'; ctx.lineWidth = wid + 3 * dpr; ctx.stroke();
-      ctx.strokeStyle = '#ffffff'; ctx.lineWidth = wid; ctx.stroke();
-      a = k;
+    const style = (q) => (P[q].bridge ? 1 : 0) | (L && path.base + q >= L.a && path.base + q <= L.b ? 2 : 0) | ((q < fadeN ? Math.min(7, Math.floor(8 * q / fadeN)) : 8) << 2);
+    g2.save(); g2.lineCap = 'round'; g2.lineJoin = 'round';
+    for (let q = 1, a = 0; q < n; q++) {  // segment q joins points q-1 and q; consecutive segments of one style, one stroke
+      const s = style(q); if (q + 1 < n && style(q + 1) === s) continue;
+      const bridge = s & 1, inLoop = s & 2, fade = s >> 2, wid = (inLoop ? 4.5 : 3) * k;
+      g2.globalAlpha = fade / 8; g2.setLineDash(bridge ? [6 * k, 6 * k] : []);
+      g2.beginPath(); let on = false;  // broken where the path goes round the back of the globe
+      for (let t = a; t <= q; t++) { scr(P[t], o); if (!o[2]) { on = false; continue; } if (on) g2.lineTo(o[0], o[1]); else g2.moveTo(o[0], o[1]); on = true; }
+      g2.strokeStyle = 'rgba(20,20,20,0.85)'; g2.lineWidth = wid + 3 * k; g2.stroke();
+      g2.strokeStyle = '#ffffff'; g2.lineWidth = wid; g2.stroke();
+      a = q;
     }
-    ctx.globalAlpha = 1; ctx.setLineDash([]);
+    g2.globalAlpha = 1; g2.setLineDash([]);
     const D = dotAt(performance.now());
     if (D) {
-      const x = X(D), y = Y(D), m = 14 * dpr;
-      if (x >= 0 && x <= W && y >= 0 && y <= H) {
-        ctx.beginPath(); ctx.arc(x, y, DOT_R * dpr, 0, 2 * Math.PI); ctx.fillStyle = accent; ctx.fill();
-        ctx.lineWidth = 3 * dpr; ctx.strokeStyle = '#ffffff'; ctx.stroke();
-      } else {  // off screen: an arrow on the edge, pointing at it
-        const ex = clamp(x, m, W - m), ey = clamp(y, m, H - m), ang = Math.atan2(y - H / 2, x - W / 2), r = 9 * dpr;
-        ctx.translate(ex, ey); ctx.rotate(ang);
-        ctx.beginPath(); ctx.moveTo(r, 0); ctx.lineTo(-r * 0.7, r * 0.75); ctx.lineTo(-r * 0.7, -r * 0.75); ctx.closePath();
-        ctx.fillStyle = accent; ctx.fill(); ctx.lineWidth = 1.5 * dpr; ctx.strokeStyle = '#ffffff'; ctx.stroke();
+      scr(D, o); let x = o[0], y = o[1]; const m = 14 * k;
+      dotShown = o[2] && x >= 0 && x <= W2 && y >= 0 && y <= H2 ? 'dot' : 'arrow';
+      if (dotShown === 'dot') {
+        g2.beginPath(); g2.arc(x, y, DOT_R * k, 0, 2 * Math.PI); g2.fillStyle = accent; g2.fill();
+        g2.lineWidth = 3 * k; g2.strokeStyle = '#ffffff'; g2.stroke();
+      } else {  // off screen, or round the back of the globe: an arrow on the edge (or the globe's rim), pointing at it
+        const ang = Math.atan2(y - H2 / 2, x - W2 / 2), r = 9 * k;
+        if (!o[2]) { x = W2 / 2 + limb * Math.cos(ang); y = H2 / 2 + limb * Math.sin(ang); }
+        // at the edge (or the rim), then inwards towards the centre until it is clear of the overlays
+        let ax = clamp(x, m, W2 - m), ay = clamp(y, m, H2 - m);
+        const bx = overlayBoxes(), far = Math.hypot(W2 / 2 - ax, H2 / 2 - ay) || 1, ux = (W2 / 2 - ax) / far, uy = (H2 / 2 - ay) / far;
+        for (let t = 0; t < far && bx.some((b) => ax > b[0] * k - m && ax < b[2] * k + m && ay > b[1] * k - m && ay < b[3] * k + m); t += 8 * k) { ax += 8 * k * ux; ay += 8 * k * uy; }
+        arrowAt = [ax / k, ay / k];
+        g2.translate(ax, ay); g2.rotate(ang);
+        g2.beginPath(); g2.moveTo(r, 0); g2.lineTo(-r * 0.7, r * 0.75); g2.lineTo(-r * 0.7, -r * 0.75); g2.closePath();
+        g2.fillStyle = accent; g2.fill(); g2.lineWidth = 1.5 * k; g2.strokeStyle = '#ffffff'; g2.stroke();
       }
     }
-    ctx.restore();
+    g2.restore();
   }
+  function drawPath(sd) { drawPathOn(ctx, dpr, W, H, (p, o) => { o[0] = (p.x - view.x) * sd + W / 2; o[1] = (p.y - view.y) * sd + H / 2; o[2] = true; }, 0); }
 
   // ---- the dot: drag it along the path to scrub (any mode); it then plays on from where it is let go ----
   const DOT_R = 8;  // CSS px
   let scrub = null;
-  const onDot = (px, py) => { const D = dotAt(performance.now()); return D && Math.hypot((D.x - view.x) * view.s + cssW / 2 - px, (D.y - view.y) * view.s + cssH / 2 - py) <= DOT_R + 8; };
+  const onDot = (px, py) => { const D = dotAt(performance.now()), q = D && pathScreen(D); return q && Math.hypot(q[0] - px, q[1] - py) <= DOT_R + 8; };
   function scrubTo(px, py) {  // the playhead to the point of the path nearest the pointer
-    const [wx, wy] = toWorld(px, py), P = path.points; let best = Infinity, bs = head.s;
+    const w = globeOn ? globeWorld(px, py) : { x: toWorld(px, py)[0], y: toWorld(px, py)[1] }; if (!w) return;  // off the globe
+    const wx = w.x, wy = w.y, P = path.points; let best = Infinity, bs = head.s;
     for (let k = 0; k + 1 < P.length; k++) {
       const a = P[k], b = P[k + 1], ux = b.x - a.x, uy = b.y - a.y, L = ux * ux + uy * uy;
       const t = L ? Math.max(0, Math.min(1, ((wx - a.x) * ux + (wy - a.y) * uy) / L)) : 0;
@@ -1786,6 +2069,51 @@ async function main() {
       if (d < best) { best = d; bs = path.base + k + t; }
     }
     head.s = bs; head.arrived = !path.drawing; pathDot = head.at(); dotA = null;
+  }
+
+  // ---- the path tool on the globe: the globe view offers each pointer here first (globeview.js: env.pen) and calls
+  // drawGlobePath over its labels. A drag on the dot scrubs; in Draw mode a drag draws (right button: clears). ----
+  const gcv = $('globe');
+  const gpen = {
+    down(px, py, e) {
+      if (onDot(px, py)) { scrub = e.pointerId; gcv.classList.add('scrub'); scrubTo(px, py); animate(); return true; }
+      if (!drawMode) return false;
+      if (e.button !== 2) pen = { id: e.pointerId, x: px, y: py, x0: px, y0: py, on: false };
+      return true;
+    },
+    move(px, py, e) {
+      if (e.pointerId === scrub) { scrubTo(px, py); return; }
+      if (!pen || e.pointerId !== pen.id) return;
+      pen.x = px; pen.y = py;
+      if (!pen.on) {  // the stroke begins once the pointer has moved 6 px, at 4 px between points
+        if (Math.hypot(px - pen.x0, py - pen.y0) < 6) return;
+        const p0 = gv.pick(pen.x0, pen.y0); if (!p0) return;
+        if (!path.points.length) newChart(p0);
+        const c = toChart(p0); pen.on = true; path.penDown(c.x, c.y, 4 / gv.tilePx()); onPathStart();
+      }
+      const c = globeWorld(px, py); if (c) path.penMove(c.x, c.y);
+    },
+    up(e) {
+      if (e.pointerId === scrub) { scrub = null; gcv.classList.remove('scrub'); }
+      else if (pen && e.pointerId === pen.id) { if (pen.on) path.penUp(); pen = null; }
+    },
+    hover(px, py) { gcv.classList.toggle('ondot', !!onDot(px, py)); },
+    cancel() {  // a second finger: scrubbing or the stroke ends
+      if (scrub !== null) { scrub = null; gcv.classList.remove('scrub'); }
+      if (pen) { if (pen.on) path.penUp(); pen = null; }
+    },
+    zoomed: () => penZoomed(),  // the view zoomed under the pen: the stroke goes on as a new one at the new spacing
+    edge() {  // the pen is down near an edge: which way, and how far into the 40 px margin (-1 to 1 each way)
+      if (!pen || !pen.on) return null;
+      const M = 40, f = (v, n) => clamp(v < M ? -(M - v) / M : v > n - M ? (v - (n - M)) / M : 0, -1, 1), dx = f(pen.x, cssW), dy = f(pen.y, cssH);
+      return dx || dy ? [dx, dy] : null;
+    },
+    carry() { if (pen && pen.on) { const c = globeWorld(pen.x, pen.y); if (c) path.penMove(c.x, c.y); } },  // the globe moved under the pen
+  };
+  gcv.addEventListener('contextmenu', (e) => { if (drawMode) { e.preventDefault(); clearPath(); } });  // Draw mode stays on
+  // The path on the globe, as on the flat maps (drawPathOn): broken where it goes round the back.
+  function drawGlobePath(g2, k) {
+    drawPathOn(g2, k, g2.canvas.width, g2.canvas.height, (p, o) => { const q = gv.project(fromChart(p)); o[0] = q[0] * k; o[1] = q[1] * k; o[2] = q[2] > 0; }, gv.radius() * k);
   }
 
   // ---- input: drag, fling, wheel and pinch zoom (positions relative to the canvas) ----
@@ -1802,7 +2130,7 @@ async function main() {
     if (scrub !== null) { scrub = null; cv.classList.remove('scrub'); }  // a second finger: scrubbing ends
     if (drawMode && ptrs.size === 1) { pen = { id: e.pointerId, x: px, y: py, x0: px, y0: py, on: false }; vx = vy = 0; return; }  // a glide stops
     if (pen) { if (pen.on) path.penUp(); pen = null; }  // a second finger: the stroke ends (if begun) and the two pinch, as when panning
-    drag = true; cv.classList.add('drag'); vx = vy = 0; last = { x: px, y: py, t: performance.now() };
+    drag = true; cv.classList.add('drag'); vx = vy = 0; zg = null; last = { x: px, y: py, t: performance.now() };  // a drag or pinch ends a zoom glide
     if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 }; }
   });
   cv.addEventListener('pointermove', (e) => {
@@ -1838,21 +2166,24 @@ async function main() {
   };
   cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
   cv.addEventListener('contextmenu', (e) => { if (drawMode) { e.preventDefault(); clearPath(); } });  // Draw mode stays on
-  cv.addEventListener('wheel', (e) => { e.preventDefault(); lastWheel = performance.now(); const [mx, my] = local(e); zoomAt(mx, my, Math.exp(-e.deltaY * (e.deltaMode ? 0.05 : 0.0015))); penZoomed(); }, { passive: false });
+  // The wheel and the zoom buttons set a goal (zg); the frame glides the zoom there, as on the globe.
+  const zoomGoal = (f, mx, my) => { zg = { s: clamp((zg ? zg.s : view.s) * f, minS(), MAX_S), mx, my }; };
+  cv.addEventListener('wheel', (e) => { e.preventDefault(); lastWheel = performance.now(); const [mx, my] = local(e); zoomGoal(Math.exp(-e.deltaY * (e.deltaMode ? 0.05 : 0.0015)), mx, my); }, { passive: false });
   // bench=1: a scripted drag for measuring frame times (__drag(true), __pan per frame, __drag(false)).
   if (BENCH) { window.__drag = (on) => { drag = on; vx = vy = 0; }; window.__pan = (dx, dy) => { view.x += dx; view.y += dy; }; }
-  const teleport = () => {  // Endless: far away; All classes: anywhere in the square
+  const teleport = () => {  // Endless: far away; All classes: anywhere in the square; the globe: a random turn
+    if (globeOn) { gv.teleport(); return; }
     const u = Math.random, w = look.layout === 'all' ? AG * LC : 2e5, o = look.layout === 'all' ? 0 : -1e5;
     view.x = o + u() * w; view.y = o + u() * w; vx = vy = 0;
   };
   $('teleport').onclick = teleport;
-  const zoomBy = (f) => { lastWheel = performance.now(); zoomAt(cssW / 2, cssH / 2, f); penZoomed(); };  // about the centre, a step of 1.5x
+  const zoomBy = (f) => { if (globeOn) gv.zoomBy(f); else { lastWheel = performance.now(); zoomGoal(f, cssW / 2, cssH / 2); } };  // about the centre, a step of 1.5x
   $('zin').onclick = () => zoomBy(1.5); $('zout').onclick = () => zoomBy(1 / 1.5);
-  $('zpct').onclick = () => zoomBy(S100 / view.s);  // back to 100%
+  $('zpct').onclick = () => { if (globeOn) gv.zoomReset(); else zoomBy(S100 / (zg ? zg.s : view.s)); };  // back to 100%
   addEventListener('keydown', (e) => {
     if (e.target.closest('input, select, textarea') || e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.key === 't' || e.key === 'T') teleport();
-    else if ((e.key === 'f' || e.key === 'F') && !e.repeat) setFill((fill + 1) % FILLS.length);  // also the Fill row in Advanced (not the main controls table)
+    else if ((e.key === 'f' || e.key === 'F') && !e.repeat) { if (!globeOn) setFill((fill + 1) % FILLS.length); }  // also the Fill row in Advanced (not the main controls table); flat maps only
     else if (e.key === 'h' || e.key === 'H') setRail(!railOpen);
     else if (e.key === 'p' || e.key === 'P') setHeld(!held);
     else if (e.key === 'm' || e.key === 'M') toggleMini();
@@ -1864,6 +2195,9 @@ async function main() {
   });
   addEventListener('keyup', (e) => arrows.delete(e.key));
   addEventListener('blur', () => arrows.clear());
+  motionReady = true;
+  if (Q.get('ng') === '1' && gAvail[G.model]) await setNoiseGlobe(true);  // a link with the noise globe on
+  if (Q.get('layout') === 'globe' && gAvail[G.model]) setGlobe(true);  // a link to the globe
 }
 
 main().catch((e) => {

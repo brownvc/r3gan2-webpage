@@ -101,7 +101,7 @@ const tests = {
     const c = vec(ga.centres, i), A = vec(ga.centres, a), mid = unit([0, 1, 2].map((t) => c[t] + 0.5 * (A[t] - c[t]))), wm = anchorWeights(ga, i, mid);
     assert.ok(Math.abs(wm.reduce((s, [, x]) => s + x, 0) - 1) < 1e-6 && wm[0][1] > w0[0][1] && wm[0][1] < 1, `halfway to an anchor its weight lies between: ${w0[0][1]} < ${wm[0][1]} < 1`);
   },
-  anchorLevels() {  // Morphing's stops (mapv2): anchors every 1, 2 or 8 cells are the tiling 0, 1 or 3 levels coarser
+  anchorLevels() {  // Morphing's stops (map.html): anchors every 1, 2 or 8 cells are the tiling 0, 1 or 3 levels coarser
     for (const [L, every] of [[7, 1], [6, 2], [4, 8]]) {
       const ga = geodesic(7, L), na = 10 * 4 ** L + 2;
       for (let i = 0; i < ga.n; i += 4099) {

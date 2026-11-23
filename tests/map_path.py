@@ -1,12 +1,12 @@
-"""Page test for mapv2.html's path tool, on a flat map and on the globe (Playwright, Chrome with WebGPU). Serve the
+"""Page test for map.html's path tool, on a flat map and on the globe (Playwright, Chrome with WebGPU). Serve the
 repo with the globe's data files, then:
-    python tests/mapv2_path.py [url] [screenshot folder]
-default url: http://localhost:8768/mapv2.html"""
+    python tests/map_path.py [url] [screenshot folder]
+default url: http://localhost:8768/map.html"""
 import sys, math, io
 from PIL import Image
 from playwright.sync_api import sync_playwright
 
-URL = sys.argv[1] if len(sys.argv) > 1 else 'http://localhost:8768/mapv2.html'
+URL = sys.argv[1] if len(sys.argv) > 1 else 'http://localhost:8768/map.html'
 SHOTS = sys.argv[2] if len(sys.argv) > 2 else None
 V, G, PT = 'window.__v2', 'window.__globe', 'window.__path'
 
