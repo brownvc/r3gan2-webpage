@@ -86,19 +86,21 @@ export function createNoiseGlobe(env) {
   // ---- the small globe. It is drawn turned by Vm, which only a drag on it changes: it never moves on its own.
   // Underneath, Dm turns, unseen, so the noise at the view's centre is always at the front, under the ring: the point
   // drawn at s holds the noise Dm^T s. Moving the map changes what the small globe's tiles hold, not where it points. ----
-  let Dm = I3.slice(), Vm = I3.slice(), cen = null, cenAt = -1;
+  // Hm = Dm^T Vm is the noise each drawn tile holds (the tile drawn at Vm y holds Hm y). Only a move of the map changes
+  // it; a spin never does, so a spin makes none of the small globe's tiles again.
+  let Dm = I3.slice(), Vm = I3.slice(), Hm = I3.slice(), cen = null, cenAt = -1;
   const centre = () => {  // the host's view centre, asked for at most every 8 ms
     const now = performance.now(); if (now - cenAt > 8) { cenAt = now; cen = host ? host.centre() : null; }
     return cen;
   };
   const noiseCentre = () => { const c = centre(); return c ? noiseOf(c.mix, c.q) : null; };
-  function faceMini() {  // the smallest turn of Dm that brings the centre's noise to the front
-    const n = noiseCentre(); if (!n) return;
+  function faceMini() {  // the smallest turn of Dm that brings the centre's noise to the front; false: none was needed
+    const n = noiseCentre(); if (!n) return false;
     const v = [0, 1, 2].map((a) => Dm[3 * a] * n[0] + Dm[3 * a + 1] * n[1] + Dm[3 * a + 2] * n[2]);
-    if (v[2] > 1 - 1e-9) return;
-    if (v[2] < -0.9999) { Dm = mul([1, 0, 0, 0, -1, 0, 0, 0, -1], Dm); return; }
+    if (v[2] > 1 - 1e-9) return false;
+    if (v[2] < -0.9999) { Dm = mul([1, 0, 0, 0, -1, 0, 0, 0, -1], Dm); return true; }
     const k = [v[1], -v[0], 0], K = [0, -k[2], k[1], k[2], 0, -k[0], -k[1], k[0], 0], K2 = mul(K, K), f = 1 / (1 + v[2]);
-    Dm = ortho(mul([0, 1, 2, 3, 4, 5, 6, 7, 8].map((j) => (j % 4 === 0) + K[j] + K2[j] * f), Dm));
+    Dm = ortho(mul([0, 1, 2, 3, 4, 5, 6, 7, 8].map((j) => (j % 4 === 0) + K[j] + K2[j] * f), Dm)); return true;
   }
   let mAll = false;  // this drag (and its flick) turns every class's noise: Shift was down at its start
   function spinMini(dx, dy) {  // a drag (or flick) of dx, dy CSS px
@@ -111,7 +113,10 @@ export function createNoiseGlobe(env) {
     const X = mul(tr(Dm), mul(R, Dm));
     if (mAll) { Mm = ortho(mul(Mm, X)); for (const [k, M] of Mc) Mc.set(k, ortho(mul(M, X))); host.spun(null); }
     else { const cs = named(c.mix); for (const k of cs) Mc.set(k, ortho(mul(Mc.get(k) ?? Mm, X))); host.spun(cs); }
-    Dm = ortho(mul(R, Dm)); Vm = ortho(mul(R, Vm)); cenAt = -1;
+    Dm = ortho(mul(R, Dm)); cenAt = -1;
+    // where the centre blends in classes the spin did not turn, its noise lands a little off the front: the drawn
+    // globe takes up that last turn too (it is under the finger), so its tiles keep their noise: Vm = Dm Hm
+    faceMini(); Vm = ortho(mul(Dm, Hm));
   }
   const miniFling = flinger(spinMini);
   let mdrag = null;
@@ -141,7 +146,7 @@ export function createNoiseGlobe(env) {
     if (!vis()) { looping = false; return; }
     const dpr = devicePixelRatio || 1, s = Math.round(mini.clientWidth * dpr); if (mini.width !== s || mini.height !== s) { mini.width = s; mini.height = s; }
     miniFling.step();
-    const r = s / 2 - 2 * dpr; mctx.clearRect(0, 0, s, s); faceMini(); const D = Vm;
+    const r = s / 2 - 2 * dpr; mctx.clearRect(0, 0, s, s); if (faceMini()) Hm = mul(tr(Dm), Vm); const D = Vm;
     const gr = mctx.createRadialGradient(s / 2 - r / 3, s / 2 - r / 3, r / 10, s / 2, s / 2, r);
     gr.addColorStop(0, '#3a4a66'); gr.addColorStop(1, '#0e1420');
     mctx.fillStyle = gr; mctx.beginPath(); mctx.arc(s / 2, s / 2, r, 0, 2 * Math.PI); mctx.fill();
@@ -178,8 +183,8 @@ export function createNoiseGlobe(env) {
     mctx.beginPath(); mctx.arc(s / 2, s / 2, 6 * dpr, 0, 2 * Math.PI); mctx.stroke();
     requestAnimationFrame(drawMini);
   }
-  // A tile drawn at Vm y holds the noise Dm^T Vm y, so its key carries that turn (rounded: a small turn keeps the
-  // tiles; a drag turns Dm and Vm together, so it keeps them all). Every tile, back included, gets its Conv-decoded
+  // A tile drawn at Vm y holds the noise Hm y, so its key carries that turn (rounded: a small turn keeps the
+  // tiles; a spin leaves Hm as it is, so it keeps them all). Every tile, back included, gets its Conv-decoded
   // latent (32 px, cheap), 3 at a time even while the map has work, so the small globe is whole and can be spun at
   // once; a tile is decoded with TAEF2 only when the map has nothing to do. Front first; old tiles stay drawn until
   // replaced. While the map moves, the small globe holds what it has: a new key (class or noise) is taken only once it
@@ -189,7 +194,7 @@ export function createNoiseGlobe(env) {
   function miniPump() {
     if (!vis() || !ready() || sh.held || sh.paused || G.lost || document.hidden || miniPend.size >= MINI_SLOTS) return;
     const c = centre(); if (!c) return;
-    const H = mul(tr(Dm), Vm), mix = c.mix, mk = mixKey(mix);
+    const H = Hm, mix = c.mix, mk = mixKey(mix);
     const key = [mk, c.id, sh.psi, sh.noiseSeed, sh.noiseStr, G.model, G.options.half, G.options.gHalf, sh.latRaw, H.map((x) => Math.round(x * 20)).join()].join('|');  // id: its base z
     if (key !== miniKey) {
       if (key !== nextKey) { nextKey = key; nextSince = performance.now(); }
@@ -257,6 +262,6 @@ export function createNoiseGlobe(env) {
       if (Mm.some((x, i) => Math.abs(x - I3[i]) > 1e-6)) q.set('nm', Mm.map(r).join(',')); else q.delete('nm');
       if (Mc.size) q.set('nc', [...Mc].map(([c, M]) => `${c}:${M.map(r).join(',')}`).join(';')); else q.delete('nc');
     },
-    state: () => ({ on, shown: vis(), tiles: miniImg.filter(Boolean).length, n: mg.n, Mm: Mm.slice(), spun: Object.fromEntries(Mc), view: Vm.slice(), front: Dm.slice(6, 9), centre: noiseCentre(), caption: $('minicapt').textContent }),
+    state: () => ({ on, shown: vis(), tiles: miniImg.filter(Boolean).length, n: mg.n, Mm: Mm.slice(), spun: Object.fromEntries(Mc), view: Vm.slice(), front: Dm.slice(6, 9), centre: noiseCentre(), caption: $('minicapt').textContent, key: miniKey }),
   };
 }

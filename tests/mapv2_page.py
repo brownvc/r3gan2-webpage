@@ -152,7 +152,8 @@ with sync_playwright() as p:
     nf = pg.evaluate(N); check(nf['spun'].keys() == n2['spun'].keys(), 'the spun classes are the same in every layout')
     pg.wait_for_function(f'{N}.tiles >= 20', timeout=120000)
     mb = pg.locator('#gmini').bounding_box(); mx, my = mb['x'] + mb['width'] / 2, mb['y'] + mb['height'] / 2
-    e4 = v()['epoch']; m4 = v()['made']; spin(); pg.wait_for_timeout(600); nf2 = pg.evaluate(N); s4 = v()
+    pg.wait_for_timeout(900); k4 = pg.evaluate(N)['key']; e4 = v()['epoch']; m4 = v()['made']; spin(); pg.wait_for_timeout(900); nf2 = pg.evaluate(N); s4 = v()
+    check(k4 and nf2['key'] == k4,'a spin keeps the noise globe\'s own tiles (none is made again)')
     check(s4['epoch'] == e4 and 0 < s4['spunTiles'] <= s4['tiles'] and len(nf2['spun']) >= len(nf['spun']) and nf2['view'] != nf['view'], f"a spin on the flat map turns its centre class's noise and marks only that class's tiles: {s4['spunTiles']} of {s4['tiles']} ({pg.inner_text('#minicap').splitlines()[0]!r})")
     pg.wait_for_function(f'{V}.made > {m4}', timeout=60000); check(True, 'and those tiles are made again')
     pg.wait_for_function(f'{V}.left === 0', timeout=180000)
