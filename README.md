@@ -4,7 +4,7 @@ The project page for *Magnitude-preserving Discriminators Enable Efficient GANs*
 [visual.cs.brown.edu/r3gan2](https://visual.cs.brown.edu/r3gan2). Code: [brownvc/R3GAN2](https://github.com/brownvc/R3GAN2).
 
 - `index.html`: the project page (samples, speed, both live generators, abstract, citation).
-- `map.html`: the ImageNet GANdscape, a zoomable map of all 1,000 classes generated live with WebGPU.
+- `map.html`: the ImageNet GANdscape, all 1,000 classes generated live with WebGPU, laid out as a 2D map or a globe, or as an endless map of random classes.
 - `generator.html`: the live sample generator, embedded in the project page.
 
 The model weights, class embeddings and decoders are fetched from `DATA` in `config.js`, which points at the Hugging
